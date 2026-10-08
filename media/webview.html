@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src {{cspSource}} 'unsafe-inline'; img-src {{cspSource}} data:; script-src {{cspSource}};">
+<link rel="stylesheet" href="{{css}}">
+</head>
+<body>
+<div id="top">
+  <button id="chats" title="Open a saved chat">Chats</button>
+  <span class="sep"></span>
+  <button id="refreshModels" title="Re-fetch the model list from the claude CLI">Refresh Models</button>
+  <span class="sep"></span>
+  <div id="ctxgroup">
+    <div id="ctxwrap"><span>context</span><div id="bar"><div id="fill"></div></div><span id="ctxlabel">-</span></div>
+    <span id="rate">Usage: send a message to load</span>
+  </div>
+  <span class="sep"></span>
+  <button id="settings" title="Claude Lite settings">Settings</button>
+</div>
+<div id="scroller"><div id="log"></div></div>
+<div id="bottom">
+  <div id="grip" title="Drag to resize the message box (double-click to reset)"></div>
+  <div id="opts">
+    <label>model <select id="model"><option value="">Loading models...</option></select></label>
+    <label>effort <select id="effort"></select></label>
+    <label>thinking <select id="thinking"></select></label>
+    <label>perms <select id="permissionMode"></select></label>
+    <div id="btns"><button id="send">Send</button><button id="stop" disabled>Stop</button></div>
+  </div>
+  <div id="row">
+    <textarea id="input" rows="2" placeholder="Message Claude...  (Enter = send, Shift+Enter = newline, Ctrl+F = find, /btw, /fork, /rewind)"></textarea>
+  </div>
+  <div id="status"><span id="stat">Ready</span><a id="md">Open as .md</a></div>
+</div>
+<script src="{{js}}"></script>
+</body></html>

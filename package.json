@@ -1,0 +1,38 @@
+{
+  "name": "claude-lite",
+  "displayName": "Claude Lite",
+  "description": "Lightweight wrapper around the Claude Code CLI: markdown chat tabs, model config, live context bar, global chat history.",
+  "publisher": "local",
+  "icon": "icon.png",
+  "version": "0.0.1",
+  "engines": { "vscode": "^1.90.0" },
+  "main": "./extension.js",
+  "activationEvents": ["onWebviewPanel:claudeLite.chat"],
+  "contributes": {
+    "commands": [
+      { "command": "claudeLite.newChat", "title": "Claude Lite: New Chat" },
+      { "command": "claudeLite.openChat", "title": "Claude Lite: Open Chat..." },
+      { "command": "claudeLite.searchChats", "title": "Claude Lite: Search All Chats..." },
+      { "command": "claudeLite.openTranscript", "title": "Claude Lite: Open Current Chat as Markdown" },
+      { "command": "claudeLite.openChatsFolder", "title": "Claude Lite: Reveal Chats Folder" },
+      { "command": "claudeLite.refreshModels", "title": "Claude Lite: Refresh Model List" }
+    ],
+    "keybindings": [
+      { "command": "claudeLite.newChat", "key": "ctrl+alt+n", "when": "!terminalFocus" }
+    ],
+    "configuration": {
+      "title": "Claude Lite",
+      "properties": {
+        "claudeLite.claudePath": { "type": "string", "default": "claude", "description": "Path to the claude executable (Windows mode)." },
+        "claudeLite.useWsl": { "type": "boolean", "default": false, "description": "Run claude inside WSL (wsl.exe -- bash -lc claude)." },
+        "claudeLite.checkForUpdates": { "type": "boolean", "default": true, "description": "On startup, compare the installed claude version with the latest published one (npm registry, same channel as the CLI's autoUpdatesChannel) and warn if it is out of date. Never updates by itself; the warning offers to run `claude update` in a terminal." },
+        "claudeLite.chatsDir": { "type": "string", "default": "", "description": "Where chats are saved. Default: ~/.claude-lite/chats" },
+        "claudeLite.defaultModel": { "type": "string", "default": "", "description": "Default model (blank = CLI default). Use an alias/ID or display name from the chat's model dropdown, e.g. opus, sonnet, fable, haiku, claude-opus-5-5, \"Opus 5.5\". Append [1m] for 1M context. Checked against the CLI's model list; invalid values fall back to the default with a warning." },
+        "claudeLite.defaultEffort": { "type": "string", "enum": ["", "low", "medium", "high", "xhigh", "max"], "enumItemLabels": ["(CLI default)", "low", "medium", "high", "xhigh", "max"], "default": "", "description": "Effort level (--effort). Levels the chosen model doesn't support fall back to the CLI default." },
+        "claudeLite.defaultThinking": { "type": "string", "enum": ["default", "off", "4000", "16000", "32000", "64000"], "default": "default", "description": "Thinking budget (sets MAX_THINKING_TOKENS)." },
+        "claudeLite.defaultPermissionMode": { "type": "string", "enum": ["auto", "acceptEdits", "manual", "dontAsk", "plan", "bypassPermissions"], "default": "auto", "description": "No interactive prompts in this wrapper: tools that would need approval are denied (and reported)." },
+        "claudeLite.extraArgs": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Extra CLI args appended to every claude invocation." }
+      }
+    }
+  }
+}
