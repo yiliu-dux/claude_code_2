@@ -82,6 +82,72 @@ async function render(md) {
   catch { return `<pre>${esc(md)}</pre>`; }
 }
 
+// ---------- clickable file paths in rendered output ----------
+
+// A path (Windows, UNC, POSIX, ~/, ./ or relative) followed by an optional :line[:col] or #L<line>[C<col>].
+const PATH = String.raw`(?:[A-Za-z]:[\\/]|\\\\|~?/|\.{1,2}[\\/])?(?:[\w.@+-]+[\\/])*[\w.@+-]*[\w@+-]`;
+const LOC = String.raw`(?::(\d+)(?::(\d+))?|#L(\d+)(?:C(\d+))?)?`;
+const PATH_RE = new RegExp(String.raw`(?<![\w/\\.~:-])(${PATH})${LOC}`, 'g');
+const HREF_RE = new RegExp(`^(${PATH})${LOC}$`);
+
+let wslCache;
+function wslInfo() { // { root: '\\wsl.localhost\<distro>\', home: '/home/<user>' }, or null
+  if (wslCache === undefined) try {
+    const [root, home] = cp.execFileSync('wsl.exe', ['--', 'sh', '-c', 'wslpath -w /; echo "$HOME"'],
+      { encoding: 'utf8', windowsHide: true, timeout: 5000 }).trim().split(/\r?\n/);
+    wslCache = { root, home };
+  } catch { wslCache = null; }
+  return wslCache;
+}
+
+// Maps a path as the agent wrote it to an existing file this extension host can open, else null.
+// Covers Windows, Git Bash (/c/...), WSL (/mnt/c/..., /home/... via \\wsl.localhost) and Windows paths seen from Linux.
+function hostPath(p, cwd) {
+  if (process.platform !== 'win32') {
+    const m = /^([a-z]):[\\/](.*)/i.exec(p);
+    if (m) p = `/mnt/${m[1].toLowerCase()}/${m[2].replace(/\\/g, '/')}`;
+    else if (p.startsWith('~')) p = os.homedir() + p.slice(1);
+  } else {
+    const useWsl = cfg().get('useWsl'), drive = (useWsl ? /^\/mnt\/([a-z])(?=\/|$)/i : /^\/(?:mnt\/)?([a-z])(?=\/|$)/i).exec(p);
+    if (drive) p = `${drive[1]}:${p.slice(drive[0].length) || '/'}`;
+    else if (useWsl && /^[~/]/.test(p)) {
+      const w = wslInfo();
+      if (!w) return null;
+      p = path.join(w.root, p.startsWith('~') ? w.home + p.slice(1) : p);
+    } else if (p.startsWith('~')) p = os.homedir() + p.slice(1);
+  }
+  const abs = path.resolve(cwd, p);
+  return fs.statSync(abs, { throwIfNoEntry: false })?.isFile() ? abs : null;
+}
+
+// Turns file paths in rendered HTML (text and scheme-less <a href>s) into links the webview opens via `open`.
+function linkPaths(html, cwd) {
+  const attrs = (p, l1, c1, l2, c2) => {
+    const file = hostPath(p, cwd);
+    return file && `data-file="${esc(file)}" data-line="${l1 || l2 || ''}" data-col="${c1 || c2 || ''}" title="${esc(file)}"`;
+  };
+  let inLink = false;
+  return html.split(/(<[^>]*>)/).map((s, i) => {
+    if (i % 2) { // tag
+      if (/^<\/a>/i.test(s)) inLink = false;
+      if (!/^<a\b/i.test(s)) return s;
+      inLink = true;
+      const href = /\bhref="([^"]*)"/.exec(s)?.[1];
+      if (!href || /^[a-z][\w+.-]+:/i.test(href)) return s;
+      let m;
+      try { m = HREF_RE.exec(decodeURIComponent(href)); } catch { return s; }
+      const a = m && attrs(...m.slice(1));
+      return a ? `<a ${a}>` : s;
+    }
+    if (inLink) return s;
+    return s.replace(PATH_RE, (all, ...g) => {
+      if (!/[\\/.]/.test(g[0])) return all; // plain words: not worth a filesystem check
+      const a = attrs(...g.slice(0, 5));
+      return a ? `<a ${a}>${all}</a>` : all;
+    });
+  }).join('');
+}
+
 function toolMd(block, result, isErr) {
   const i = block.input || {};
   const sum = String(i.command || i.file_path || i.pattern || i.url || i.query || i.description || i.prompt || '').split('\n')[0];
@@ -401,11 +467,12 @@ class ChatSession {
 
   post(m) { if (!this.disposed) this.panel.webview.postMessage(m); }
   status(text) { this.post({ type: 'status', text }); }
+  async html(md) { return linkPaths(await render(md), this.chat.cwd); }
 
   async onMessage(m) {
     switch (m.type) {
       case 'ready': {
-        const messages = await Promise.all(this.chat.messages.map(async (msg, idx) => ({ idx, role: msg.role, html: await render(msg.md) })));
+        const messages = await Promise.all(this.chat.messages.map(async (msg, idx) => ({ idx, role: msg.role, html: await this.html(msg.md) })));
         this.post({ type: 'init', chatId: this.chat.id, settings: this.chat.settings, options: OPTIONS, messages, busy: this.busy });
         this.postContext();
         showUsage();
@@ -428,6 +495,12 @@ class ChatSession {
         break;
       }
       case 'transcript': openTranscript(this.chat); break;
+      case 'open': {
+        const pos = new vscode.Position(Math.max(0, m.line - 1), Math.max(0, m.col - 1));
+        vscode.commands.executeCommand('vscode.open', vscode.Uri.file(m.file), { viewColumn: vscode.ViewColumn.Beside, selection: new vscode.Range(pos, pos) })
+          .then(undefined, e => this.status(`Error: could not open ${m.file}: ${e.message}`));
+        break;
+      }
     }
   }
 
@@ -460,7 +533,7 @@ class ChatSession {
     if (!m) return;
     const seq = (this.renderSeq.get(idx) || 0) + 1;
     this.renderSeq.set(idx, seq);
-    const html = await render(m.md);
+    const html = await this.html(m.md);
     if (this.renderSeq.get(idx) === seq) this.post({ type: 'upsert', idx, role: m.role, html });
   }
 

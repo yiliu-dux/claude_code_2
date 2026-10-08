@@ -7,6 +7,7 @@ Minimal VS Code wrapper around the `claude` CLI (uses your logged-in subscriptio
 - **Bottom bar**: model / effort / thinking budget / permission mode dropdowns (scroll the mouse wheel over any of them to step through the options) and Send / Stop.
 - **Message box**: grows with what you type up to 10 lines; drag the top edge of the bottom panel to make it taller (double-click the edge to reset). The chat follows new output only while you are scrolled to the bottom.
 - **Slash commands**: `/btw <question>` (side question, not added to the chat), `/fork` (copy the chat into a new tab), `/rewind` (drop a message and everything after it, and undo the file edits Claude made with Edit/Write since then; changes made through Bash commands are not tracked). Other commands such as `/compact` go to the CLI.
+- **File links**: file paths in the output (relative, absolute, `~/`, with optional `:line[:col]` or `#L<line>`) become links that open the file beside the chat at that line. Only files that exist are linked; WSL paths (`/mnt/c/...`, `/home/...`) and Git Bash paths (`/c/...`) are mapped to Windows ones.
 - **History**: every chat is saved to `~/.claude-lite/chats/<id>.json` + `<id>.md`. Use `Claude Lite: Open Chat…`, `Search All Chats…`, or open the `.md` directly.
 
 ## Install

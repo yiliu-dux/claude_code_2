@@ -46,12 +46,13 @@ claude -p --input-format stream-json --output-format stream-json --verbose --inc
   - `/btw <q>` — one-shot `claude -p --resume <sid> --fork-session --no-session-persistence --tools ""`; answer shown inline, never added to the real session. Allowed while a turn is running.
   - `/fork` — new chat with copied messages and `forkFrom = sessionId`; its first turn uses `--resume <forkFrom> --fork-session`.
   - `/rewind` — truncates `chat.messages`, then the next turn uses `--resume <sid> --fork-session --resume-session-at <resumeAt>`. Files are restored first: every process gets `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=1` (off by default in `-p` mode), each user turn is written to stdin with our own `uuid` (saved on the message), and rewind sends `control_request {subtype:"rewind_files", user_message_id: uuid}` through a short-lived `--resume <sid>` process (`controlRequest()`). Works across restarts and earlier rewinds/forks. Only Edit/Write changes are tracked, not Bash.
+- **File links**: `ChatSession.html()` = `render()` + `linkPaths()`, which walks the rendered HTML's text (outside `<a>`) and scheme-less `<a href>`s, and turns paths that `hostPath()` resolves to an existing file into `<a data-file data-line data-col>`. `hostPath()` maps WSL/Git Bash paths to Windows (`/mnt/c`, `/c`, `/home` via `wsl.exe wslpath -w /`, cached) and Windows paths to `/mnt/c` when the host runs on Linux. The webview posts `open` on click.
 - `system/api_retry` events are shown in the status line; otherwise a turn stuck in API retries looks frozen. `stop()` and the `result` handler always clear `busy`, so the UI can't stay locked with Send disabled.
 - Interactive CLI features (permission prompts, `/model` picker, etc.) do not work in `-p` mode. Tools needing approval are denied and reported as an info message.
 
 ### Webview protocol (`postMessage`)
 
-- webview → host: `ready`, `send`, `stop`, `setting`, `customModel`, `pickChat`, `refreshModels`, `settings`, `transcript`
+- webview → host: `ready`, `send`, `stop`, `setting`, `customModel`, `pickChat`, `refreshModels`, `settings`, `transcript`, `open` (file, line, col)
 - host → webview: `init`, `upsert` (idx, role, rendered html), `busy`, `ctx`, `status`, `rate`, `setting` (key, value - host-side changes, e.g. model normalized or unsupported effort reset), `models`, `prefill`
 
 Messages are addressed by index in `chat.messages`; `upsert` creates or replaces the element `#m<idx>`.

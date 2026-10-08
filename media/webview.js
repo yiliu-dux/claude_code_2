@@ -46,6 +46,13 @@ function upsert(m) {
   if (open) { const d = el.querySelector('details'); if (d) d.open = true; }
   if (stick) toBottom();
 }
+// File links (data-file is set by the host only for paths that exist) open in an editor beside the chat.
+log.addEventListener('click', e => {
+  const a = e.target.closest('a[data-file]');
+  if (!a) return;
+  e.preventDefault();
+  vscode.postMessage({ type: 'open', file: a.dataset.file, line: +a.dataset.line || 1, col: +a.dataset.col || 1 });
+});
 // During a turn, Send stays usable only for /btw (which runs alongside it).
 let busy = false;
 const isBtw = () => input.value.trim().startsWith('/btw ');
