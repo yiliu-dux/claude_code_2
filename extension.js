@@ -164,6 +164,17 @@ function toolMd(block, result, isErr) {
   return md + '\n</details>';
 }
 
+// Short description of a tool call for the status line, e.g. 'Bash: Run the tests' or 'Read: extension.js'.
+function toolLabel(b) {
+  const i = b.input || {}, file = i.file_path || i.notebook_path;
+  let what = b.name === 'Bash' ? i.description || i.command
+    : file ? String(file).split(/[\\/]/).pop()
+    : i.pattern || i.url || i.query || i.description || i.skill || '';
+  what = String(what || '').split('\n')[0];
+  if (what.length > 80) what = what.slice(0, 77) + '...';
+  return what ? `${b.name}: ${what}` : b.name;
+}
+
 const resultText = c => typeof c === 'string' ? c
   : Array.isArray(c) ? c.map(x => (x.type === 'text' ? x.text : `[${x.type}]`)).join('\n') : '';
 
@@ -276,10 +287,10 @@ function fetchModels() {
     // Fix up chats whose settings were made before the list was known (e.g. "Opus 5.5" -> "opus").
     for (const s of ChatSession.sessions.values()) {
       const m = normalizeModel(s.chat.settings.model), renamed = m.ok && m.value !== s.chat.settings.model;
-      if (m.ok === false) s.status(`Warning: model "${s.chat.settings.model}" isn't in the CLI's model list`);
+      if (m.ok === false) s.note(`Warning: model "${s.chat.settings.model}" isn't in the CLI's model list`);
       if (renamed) s.chat.settings.model = m.value;
       const effortFix = s.checkEffort();
-      if (effortFix) s.status(effortFix);
+      if (effortFix) s.note(effortFix);
       if (renamed || effortFix) saveChat(s.chat);
       s.post({ type: 'setting', key: 'model', value: s.chat.settings.model });
     }
@@ -448,6 +459,8 @@ class ChatSession {
     this.busy = false;
     this.streamIdx = null;
     this.tools = new Map(); // tool_use_id -> { idx, block }
+    this.running = new Map(); // tool_use_id -> status label, for tools of the current turn without a result yet
+    this.bg = []; // background tasks the CLI reports as running (it starts a new turn by itself when one finishes)
     this.renderTimers = new Map();
     this.renderSeq = new Map(); // idx -> latest render request, so a slow older render can't overwrite a newer one
     this.disposed = false;
@@ -466,7 +479,10 @@ class ChatSession {
   }
 
   post(m) { if (!this.disposed) this.panel.webview.postMessage(m); }
-  status(text) { this.post({ type: 'status', text }); }
+  // Status line, left: what the agent is doing (the webview adds a running timer while busy). Nothing else goes there.
+  agent(text) { this.agentState = { text, since: Date.now() }; this.post({ type: 'agent', ...this.agentState }); }
+  // Status line, right: everything that isn't agent activity (setting changes, warnings, wrapper errors).
+  note(text) { this.post({ type: 'note', text }); }
   async html(md) { return linkPaths(await render(md), this.chat.cwd); }
 
   async onMessage(m) {
@@ -474,6 +490,7 @@ class ChatSession {
       case 'ready': {
         const messages = await Promise.all(this.chat.messages.map(async (msg, idx) => ({ idx, role: msg.role, html: await this.html(msg.md) })));
         this.post({ type: 'init', chatId: this.chat.id, settings: this.chat.settings, options: OPTIONS, messages, busy: this.busy });
+        this.post({ type: 'agent', ...(this.agentState || { text: 'Ready', since: Date.now() }) });
         this.postContext();
         showUsage();
         postModels(this);
@@ -491,14 +508,14 @@ class ChatSession {
         const m = normalizeModel(v);
         this.post({ type: 'setting', key: 'model', value: m.value });
         this.applySetting('model', m.value);
-        if (m.ok === false) this.status(`Warning: "${m.value}" isn't in the CLI's model list - the next message may fail`);
+        if (m.ok === false) this.note(`Warning: "${m.value}" isn't in the CLI's model list - the next message may fail`);
         break;
       }
       case 'transcript': openTranscript(this.chat); break;
       case 'open': {
         const pos = new vscode.Position(Math.max(0, m.line - 1), Math.max(0, m.col - 1));
         vscode.commands.executeCommand('vscode.open', vscode.Uri.file(m.file), { viewColumn: vscode.ViewColumn.Beside, selection: new vscode.Range(pos, pos) })
-          .then(undefined, e => this.status(`Error: could not open ${m.file}: ${e.message}`));
+          .then(undefined, e => this.note(`Error: could not open ${m.file}: ${e.message}`));
         break;
       }
     }
@@ -509,8 +526,10 @@ class ChatSession {
     const effortFix = key === 'model' ? this.checkEffort() : '';
     saveChat(this.chat);
     // Model/effort/etc are CLI flags: restart the process (it resumes the same session) on the next turn.
-    if (this.busy) this.pendingRestart = true; else this.kill();
-    this.status(`${SETTING_NAMES[key]} -> ${label(value)} (applies to next message)${effortFix ? ' | ' + effortFix : ''}`);
+    // Not while background tasks run: killing the process would kill them and the turn they trigger.
+    const later = this.busy || this.bg.length;
+    if (later) this.pendingRestart = true; else this.kill();
+    this.note(`${SETTING_NAMES[key]} -> ${label(value)} (applies ${later ? 'once the current work finishes' : 'to next message'})${effortFix ? ' | ' + effortFix : ''}`);
   }
 
   // Resets an effort level the chat's model doesn't support; returns a note for the status line, or ''.
@@ -548,7 +567,7 @@ class ChatSession {
     text = text.trim();
     // Slash commands the CLI's print mode doesn't support are emulated here.
     const slash = text.match(/^\/(btw|fork|rewind)\b\s*([\s\S]*)$/);
-    if (slash?.[1] === 'btw') return slash[2] ? this.btw(slash[2]) : this.status('Usage: /btw <question>');
+    if (slash?.[1] === 'btw') return slash[2] ? this.btw(slash[2]) : this.note('Usage: /btw <question>');
     if (slash?.[1] === 'fork') return this.fork();
     if (slash?.[1] === 'rewind') return this.rewind();
     if (!text || this.busy) return;
@@ -563,7 +582,8 @@ class ChatSession {
     if (!this.proc) this.start();
     if (!this.proc) return;
     this.setBusy(true);
-    this.status('Sending...');
+    this.note('');
+    this.agent('Sending...');
     this.proc.stdin.write(JSON.stringify({ type: 'user', uuid, message: { role: 'user', content: text } }) + '\n');
   }
 
@@ -595,9 +615,9 @@ class ChatSession {
   // last assistant message before it. Files changed by Edit/Write since that message are restored through the
   // CLI's file checkpoints (changes made via Bash are not tracked).
   async rewind() {
-    if (this.busy) return this.status('Wait for the current turn to finish before rewinding');
+    if (this.busy) return this.note('Wait for the current turn to finish before rewinding');
     const users = this.chat.messages.map((m, idx) => ({ m, idx })).filter(x => x.m.role === 'user');
-    if (!users.length) return this.status('Nothing to rewind');
+    if (!users.length) return this.note('Nothing to rewind');
     const pick = await vscode.window.showQuickPick(users.reverse().map(({ m, idx }) => ({
       label: m.md.replace(/\s+/g, ' ').slice(0, 80),
       description: m.resumeAt === undefined ? 'cannot rewind (saved before /rewind support)' : '',
@@ -605,12 +625,12 @@ class ChatSession {
     })), { placeHolder: 'Rewind the conversation and Claude\'s file edits (Edit/Write) to just before this message' });
     if (!pick || this.busy) return;
     const target = this.chat.messages[pick.idx];
-    if (target.resumeAt === undefined) return this.status('This message predates /rewind support');
+    if (target.resumeAt === undefined) return this.note('This message predates /rewind support');
     this.kill();
     const sid = this.chat.sessionId || this.chat.forkFrom;
     let files = 'Files were not restored (message saved before file rewind support).';
     if (target.uuid && sid) {
-      this.status('Restoring files...');
+      this.note('Restoring files...');
       this.restoring = true; // Stop is ignored meanwhile: unlocking the UI here would allow sending mid-rewind
       this.setBusy(true);
       try {
@@ -621,7 +641,7 @@ class ChatSession {
       }
       this.restoring = false;
       this.setBusy(false);
-      this.status('');
+      this.note('');
       if (this.disposed) return; // tab closed (or chat deleted) meanwhile
     }
     this.chat.messages.length = pick.idx;
@@ -640,7 +660,7 @@ class ChatSession {
 
   // Fork: new chat tab whose first turn resumes this session with --fork-session.
   fork() {
-    if (this.busy) return this.status('Wait for the current turn to finish before forking');
+    if (this.busy) return this.note('Wait for the current turn to finish before forking');
     if (!this.resumeArgs()) return this.push({ role: 'info', md: '> /fork needs an existing conversation - send a message first.' });
     saveChat(this.chat);
     const c = this.chat, f = Object.assign(newChat(), {
@@ -678,14 +698,17 @@ class ChatSession {
       if (this.proc !== p) return;
       this.proc = null;
       this.push({ role: 'info', md: `> **Error:** Failed to start \`${cmd}\`: ${err.message}` });
+      this.agent(`Error: failed to start ${cmd}`);
       this.setBusy(false);
     });
     // 'close' (not 'exit'): fires only after stdout is drained, so a final result event is handled first.
     p.on('close', code => {
       if (this.proc !== p) return; // intentional kill
       this.proc = null;
+      this.bg = [];
       if (this.busy) {
         this.push({ role: 'info', md: `> **Error:** claude exited (code ${code})\n\n${fence('', errTail.trim() || '(no stderr)')}` });
+        this.agent(`Error: claude exited (code ${code})`);
         this.setBusy(false);
         saveChat(this.chat);
       }
@@ -695,6 +718,8 @@ class ChatSession {
   kill() {
     const p = this.proc;
     this.proc = null;
+    this.bg = [];
+    this.running.clear();
     if (p) try { p.kill(); } catch { /* already gone */ }
   }
 
@@ -702,6 +727,7 @@ class ChatSession {
     if (!this.busy || this.restoring) return;
     if (!this.proc) return this.setBusy(false); // nothing left to interrupt - never leave the UI locked
     this.interrupted = true;
+    this.agent('Stopping...');
     this.proc.stdin.write(JSON.stringify({ type: 'control_request', request_id: `int_${Date.now()}`, request: { subtype: 'interrupt' } }) + '\n');
     const p = this.proc;
     setTimeout(() => { // hard fallback if the interrupt is ignored
@@ -709,6 +735,7 @@ class ChatSession {
         this.kill();
         this.interrupted = false;
         this.push({ role: 'info', md: '> Stopped' });
+        this.agent('Stopped');
         this.setBusy(false);
         saveChat(this.chat);
       }
@@ -716,15 +743,29 @@ class ChatSession {
   }
 
   handle(ev) {
-    if (ev.parent_tool_use_id) return; // subagent traffic - keep the main transcript clean
+    if (ev.parent_tool_use_id) return this.onSubagent(ev); // status line only - keep the main transcript clean
+    // The CLI also starts turns by itself (when a background task finishes): show those as running too.
+    if (!this.busy && !this.restoring && (ev.type === 'stream_event' || ev.type === 'assistant' || (ev.type === 'system' && ev.subtype === 'init'))) {
+      this.setBusy(true);
+      this.agent(this.resumeNote ? `${this.resumeNote} - Claude is continuing...` : 'Claude is continuing on its own...');
+      this.resumeNote = '';
+    }
     switch (ev.type) {
       case 'system':
-        if (ev.subtype === 'init') { this.chat.sessionId = ev.session_id; this.status(`${ev.model} | ${ev.permissionMode || ''}`); }
-        else if (ev.subtype === 'status' && ev.status) this.status(ev.status);
+        if (ev.subtype === 'init') { this.chat.sessionId = ev.session_id; this.agent('Waiting for Claude...'); }
+        else if (ev.subtype === 'status') this.agent(ev.status === 'compacting' ? 'Compacting conversation...' : !ev.status || ev.status === 'requesting' ? 'Waiting for Claude...' : `${ev.status}...`);
         else if (ev.subtype === 'compact_boundary') this.push({ role: 'info', md: '> Context compacted' });
         else if (ev.subtype === 'api_retry') {
           const why = ev.error_status ? `${ev.error_status} ${ev.error || ''}` : (ev.error || 'no response');
-          this.status(`API error (${String(why).trim()}) - retry ${ev.attempt}/${ev.max_retries} in ${Math.round((ev.retry_delay_ms || 0) / 1000)}s | Stop to give up`);
+          this.agent(`API error (${String(why).trim()}) - retry ${ev.attempt}/${ev.max_retries} in ${Math.round((ev.retry_delay_ms || 0) / 1000)}s - Stop to give up`);
+        }
+        else if (ev.subtype === 'background_tasks_changed') {
+          this.bg = ev.tasks || [];
+          if (!this.busy && this.bg.length) this.agent(`Idle | ${this.bgText()}`);
+        }
+        else if (ev.subtype === 'task_notification' && ev.summary) {
+          this.resumeNote = ev.summary; // shown when the turn it triggers starts
+          if (!this.busy) this.agent(ev.summary);
         }
         break;
       case 'rate_limit_event': {
@@ -732,6 +773,9 @@ class ChatSession {
         if (w) { globalState?.update('usage', w); showUsage(w); }
         break;
       }
+      case 'control_response':
+        if (ev.response?.request_id === 'ctx') this.onContextUsage(ev.response.response);
+        break;
       case 'stream_event': this.onStream(ev.event); break;
       case 'assistant':
         if (ev.uuid) this.chat.lastUuid = ev.uuid;
@@ -746,13 +790,13 @@ class ChatSession {
 
   onStream(e) {
     switch (e.type) {
-      case 'message_start': this.setUsage(e.message.usage, e.message.model); break;
+      case 'message_start': this.setUsage(e.message.usage); break;
       case 'message_delta': this.setUsage(e.usage); break;
       case 'content_block_start': {
         const b = e.content_block;
-        if (b.type === 'text') { this.streamIdx = this.push({ role: 'assistant', md: '' }); this.status('Writing...'); }
-        else if (b.type === 'thinking') this.status('Thinking...');
-        else if (b.type === 'tool_use') this.status(`Running ${b.name}...`);
+        if (b.type === 'text') { this.streamIdx = this.push({ role: 'assistant', md: '' }); this.agent('Writing response...'); }
+        else if (b.type === 'thinking') this.agent('Thinking...');
+        else if (b.type === 'tool_use') this.agent(`Preparing ${b.name}...`); // its input is still streaming
         break;
       }
       case 'content_block_delta':
@@ -774,8 +818,29 @@ class ChatSession {
         } else this.push({ role: 'assistant', md: b.text });
       } else if (b.type === 'tool_use') {
         this.tools.set(b.id, { idx: this.push({ role: 'tool', md: toolMd(b) }), block: b });
+        this.running.set(b.id, toolLabel(b));
       }
     }
+    if ((msg.content || []).some(b => b.type === 'tool_use')) this.showRunning();
+  }
+
+  // Status for the tools still waiting for a result; none left = Claude is on the next request.
+  showRunning() {
+    const l = [...this.running.values()];
+    this.agent(!l.length ? 'Waiting for Claude...' : l.length === 1 ? `Running ${l[0]}` : `Running ${l.length} tools: ${l.join(', ')}`);
+  }
+
+  // Subagent events only update the status line, e.g. 'Agent "Find tests": running Grep: describe'.
+  onSubagent(ev) {
+    if (ev.type !== 'assistant') return;
+    const who = this.tools.get(ev.parent_tool_use_id)?.block.input?.description || 'subagent';
+    const tool = (ev.message.content || []).filter(b => b.type === 'tool_use').pop();
+    this.agent(`Agent "${who}": ${tool ? 'running ' + toolLabel(tool) : 'thinking...'}`);
+  }
+
+  bgText() {
+    const n = this.bg.length;
+    return `${n} background task${n > 1 ? 's' : ''} running (${this.bg.map(t => t.description || t.task_type).join(', ')}) - Claude continues when ${n > 1 ? 'they finish' : 'it finishes'}`;
   }
 
   onToolResults(msg) {
@@ -783,37 +848,50 @@ class ChatSession {
     for (const b of msg.content) {
       const t = b.type === 'tool_result' && this.tools.get(b.tool_use_id);
       if (!t) continue;
+      if (this.running.delete(b.tool_use_id) && this.busy) this.showRunning();
       this.chat.messages[t.idx].md = toolMd(t.block, resultText(b.content), b.is_error);
       this.upsert(t.idx);
     }
   }
 
   onResult(ev) {
-    const windows = Object.values(ev.modelUsage || {}).map(u => u.contextWindow).filter(Boolean);
-    if (windows.length && this.chat.context) { this.chat.context.window = Math.max(...windows); this.postContext(); }
-    if (this.interrupted) {
+    const restart = this.pendingRestart && !this.bg.length; // background tasks still need this process
+    if (!restart) this.proc?.stdin.write(JSON.stringify({ type: 'control_request', request_id: 'ctx', request: { subtype: 'get_context_usage' } }) + '\n');
+    const interrupted = this.interrupted, failed = !interrupted && (ev.is_error || (ev.subtype && ev.subtype !== 'success'));
+    if (interrupted) {
       this.interrupted = false;
       this.push({ role: 'info', md: '> Interrupted' });
-    } else if (ev.is_error || (ev.subtype && ev.subtype !== 'success')) {
+    } else if (failed) {
       this.push({ role: 'info', md: `> **Error:** ${ev.subtype}: ${ev.result || (ev.errors || []).join('; ') || 'error'}` });
     }
     if (ev.permission_denials?.length) {
       const names = [...new Set(ev.permission_denials.map(d => d.tool_name))].join(', ');
       this.push({ role: 'info', md: `> Permission denied for: **${names}** - change the permission mode (bottom bar) and ask again.` });
     }
-    this.status(`Done | ${((ev.duration_ms || 0) / 1000).toFixed(1)}s | ${ev.num_turns ?? '?'} turns`);
+    this.agent(interrupted ? 'Interrupted' : [failed ? `Error (${ev.subtype || 'error'})` : 'Done',
+      `${((ev.duration_ms || 0) / 1000).toFixed(1)}s`, `${ev.num_turns ?? '?'} turns`, this.bg.length && this.bgText()].filter(Boolean).join(' | '));
+    this.running.clear();
     this.streamIdx = null;
     this.setBusy(false);
     saveChat(this.chat);
-    if (this.pendingRestart) { this.pendingRestart = false; this.kill(); }
+    if (restart) { this.pendingRestart = false; this.kill(); }
   }
 
-  setUsage(u, model) {
-    if (!u) return;
+  // Live estimate while streaming; needs a known window (the CLI's exact numbers arrive via onContextUsage after each turn).
+  setUsage(u) {
+    const c = this.chat.context;
+    if (!u || !c) return;
     const used = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.output_tokens || 0);
-    const guess = /\[1m\]/i.test(this.chat.settings.model || '') ? 1_000_000 : 200_000;
-    this.chat.context = { used, window: this.chat.context?.window || guess, model: model || this.chat.context?.model };
+    this.chat.context = { ...c, used };
     this.postContext();
+  }
+
+  // Response to the get_context_usage request sent after each turn: exact token count and window from the CLI.
+  onContextUsage(r) {
+    if (!r?.maxTokens) return;
+    this.chat.context = { used: r.totalTokens, window: r.maxTokens, model: r.model };
+    this.postContext();
+    saveChat(this.chat);
   }
 
   postContext() {

@@ -57,7 +57,15 @@ log.addEventListener('click', e => {
 let busy = false;
 const isBtw = () => input.value.trim().startsWith('/btw ');
 const syncSend = () => { $('send').disabled = busy && !isBtw(); };
-function setBusy(b) { busy = b; $('stop').disabled = !b; syncSend(); }
+function setBusy(b) { busy = b; $('stop').disabled = !b; syncSend(); showAgent(); }
+// Status line: the agent's current activity (left; plus how long it has been at it while busy) and other notes (right).
+let agentMsg = { text: 'Ready', since: Date.now() };
+const elapsed = ms => { const s = Math.floor(ms / 1000); return s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + String(s % 60).padStart(2, '0') + 's'; };
+function showAgent() {
+  $('stat').textContent = $('stat').title = agentMsg.text + (busy ? ' | ' + elapsed(Date.now() - agentMsg.since) : '');
+}
+setInterval(() => { if (busy) showAgent(); }, 1000);
+const setNote = text => { $('note').textContent = $('note').title = text; };
 function setCtx(c) {
   const pct = Math.min(100, 100 * c.used / c.window);
   $('fill').style.width = pct + '%';
@@ -93,7 +101,8 @@ window.addEventListener('message', ({ data: m }) => {
     case 'busy': setBusy(m.busy); break;
     case 'prefill': input.value = m.text; autoResize(); syncSend(); input.focus(); break;
     case 'ctx': setCtx(m); break;
-    case 'status': $('stat').textContent = m.text; break;
+    case 'agent': agentMsg = m; showAgent(); break;
+    case 'note': setNote(m.text); break;
     case 'rate': setRate(m); break;
     case 'setting': if (m.key === 'model') setModel(m.value); else $(m.key).value = m.value; break;
     case 'models': buildModels(m); break;
@@ -109,7 +118,7 @@ function buildModels({ state, list, error }) {
   btn.textContent = state === 'loading' ? 'Loading models...' : state === 'error' ? 'Models failed - retry' : 'Refresh Models';
   btn.className = state === 'error' ? 'warn' : '';
   btn.title = state === 'error' ? 'Model list fetch failed: ' + error : state === 'ok' ? list.length + ' models from the CLI - click to re-fetch' : 'Asking the CLI for its model list...';
-  if (state === 'error') $('stat').textContent = 'Could not fetch model list: ' + error;
+  if (state === 'error') setNote('Could not fetch model list: ' + error);
   const sel = $('model');
   sel.innerHTML = '';
   if (state !== 'ok') sel.add(new Option(state === 'loading' ? 'Loading models...' : 'Model list unavailable', ''));

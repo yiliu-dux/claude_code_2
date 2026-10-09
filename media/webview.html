@@ -14,6 +14,8 @@
     <span id="rate">Usage: send a message to load</span>
   </div>
   <span class="sep"></span>
+  <button id="md" title="Open this chat's transcript as a Markdown file">Open as .md</button>
+  <span class="sep"></span>
   <button id="settings" title="Claude Lite settings">Settings</button>
 </div>
 <div id="scroller"><div id="log"></div></div>
@@ -29,7 +31,7 @@
   <div id="row">
     <textarea id="input" rows="2" placeholder="Message Claude...  (Enter = send, Shift+Enter = newline, Ctrl+F = find, /btw, /fork, /rewind)"></textarea>
   </div>
-  <div id="status"><span id="stat">Ready</span><a id="md">Open as .md</a></div>
+  <div id="status"><span id="stat">Ready</span><span id="note"></span></div>
 </div>
 <script src="{{js}}"></script>
 </body></html>

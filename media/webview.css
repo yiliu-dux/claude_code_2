@@ -50,4 +50,8 @@ select { box-sizing: border-box; height: 22px; padding: 0 4px; font-size: 12px; 
 #btns { margin-left: auto; display: flex; gap: 6px; }
 #row { display: flex; }
 #input { flex: 1; box-sizing: border-box; resize: none; overflow-y: auto; line-height: 1.4; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, transparent); padding: 6px; }
-#status { margin-top: 4px; font-size: 11px; opacity: .7; display: flex; justify-content: space-between; }
+/* status line: agent activity on the left, other notes right-aligned on the same line */
+#status { margin-top: 4px; font-size: 11px; opacity: .7; display: flex; gap: 16px; }
+#stat, #note { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#stat { flex: 1 1 auto; }
+#note { flex: 0 1 auto; margin-left: auto; text-align: right; }
