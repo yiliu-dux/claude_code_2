@@ -106,6 +106,10 @@ window.addEventListener('message', ({ data: m }) => {
       break;
     case 'upsert': upsert(m); break;
     case 'busy': setBusy(m.busy); break;
+    case 'pending': // settings changed since the process started: the next send restarts it
+      $('send').textContent = m.restart ? 'Send + Restart' : 'Send';
+      $('send').title = m.restart ? 'Restarts the claude process (resumes this session) to apply:\n' + m.changes.join('\n') : m.changes.length ? 'Pending:\n' + m.changes.join('\n') : '';
+      break;
     case 'prefill': input.value = m.text; autoResize(); syncSend(); input.focus(); break;
     case 'ctx': setCtx(m); break;
     case 'agent': agentMsg = m; showAgent(); break;
@@ -158,7 +162,7 @@ $('model').addEventListener('change', () => {
   vscode.postMessage({ type: 'setting', key: 'model', value: v });
 });
 // Scroll wheel over a dropdown steps through its options (skipping disabled ones and "Custom...").
-// The host is told once the wheel settles, since each setting change restarts the claude process.
+// The host is told once the wheel settles, so scrolling through options doesn't produce a note per step.
 const wheelTimers = {};
 for (const k of ['model', 'effort', 'thinking', 'permissionMode']) {
   const sel = $(k);

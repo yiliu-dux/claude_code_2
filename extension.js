@@ -458,6 +458,7 @@ class ChatSession {
     this.panel = panel;
     panel.iconPath = vscode.Uri.file(path.join(__dirname, 'icon.png'));
     this.proc = null;
+    chat.applied ??= { ...chat.settings }; // what the claude process was last started with (settings may be ahead of it)
     this.busy = false;
     this.streamIdx = null;
     this.tools = new Map(); // tool_use_id -> { idx, block }
@@ -493,6 +494,7 @@ class ChatSession {
         const messages = await Promise.all(this.chat.messages.map(async (msg, idx) => ({ idx, role: msg.role, html: await this.html(msg.md), ts: this.stamp(idx) })));
         this.post({ type: 'init', chatId: this.chat.id, settings: this.chat.settings, options: OPTIONS, messages, busy: this.busy });
         this.post({ type: 'agent', ...(this.agentState || { text: 'Ready', since: Date.now() }) });
+        this.syncPending();
         this.postContext();
         showUsage();
         postModels(this);
@@ -524,14 +526,24 @@ class ChatSession {
   }
 
   applySetting(key, value) {
+    if (this.chat.settings[key] === value) return;
     this.chat.settings[key] = value;
     const effortFix = key === 'model' ? this.checkEffort() : '';
     saveChat(this.chat);
-    // Model/effort/etc are CLI flags: restart the process (it resumes the same session) on the next turn.
-    // Not while background tasks run: killing the process would kill them and the turn they trigger.
-    const later = this.busy || this.bg.length;
-    if (later) this.pendingRestart = true; else this.kill();
-    this.note(`${SETTING_NAMES[key]} -> ${label(value)} (applies ${later ? 'once the current work finishes' : 'to next message'})${effortFix ? ' | ' + effortFix : ''}`);
+    // Model/effort/etc are CLI flags: nothing happens now. The next send restarts the process (it resumes the same
+    // session) if the settings differ from what it was started with. Notes compare against that, not the previous dropdown value.
+    const applied = this.chat.applied[key] ?? '';
+    this.note(value === applied && !effortFix ? '' : `${SETTING_NAMES[key]}: ${label(applied)} -> ${label(value)} (${this.proc ? 'restarts on next send' : 'applies to next message'})${effortFix ? ' | ' + effortFix : ''}`);
+    this.syncPending();
+  }
+
+  // Settings that differ from what the running process was started with; the Send button shows "Send + Restart" for them.
+  syncPending() {
+    const { settings: s, applied: a } = this.chat;
+    const changes = Object.keys(SETTING_NAMES).filter(k => (s[k] ?? '') !== (a[k] ?? ''))
+      .map(k => `${SETTING_NAMES[k]}: ${label(a[k] ?? '')} -> ${label(s[k] ?? '')}`);
+    this.post({ type: 'pending', restart: !!this.proc && changes.length > 0, changes });
+    return changes.length > 0;
   }
 
   // Resets an effort level the chat's model doesn't support; returns a note for the status line, or ''.
@@ -581,6 +593,7 @@ class ChatSession {
     if (slash?.[1] === 'fork') return this.fork();
     if (slash?.[1] === 'rewind') return this.rewind();
     if (!text || this.busy) return;
+    if (this.proc && this.syncPending()) this.kill(); // settings changed: restart (kills background tasks too); start() resumes the session
     if (this.chat.title === 'New chat') {
       this.chat.title = text.replace(/\s+/g, ' ').slice(0, 60);
       this.panel.title = this.chat.title;
@@ -698,8 +711,10 @@ class ChatSession {
   }
 
   start() {
-    const p = spawnClaude(this.chat, [...STREAM_ARGS, '--include-partial-messages', ...(this.resumeArgs() || [])]);
+    this.chat.applied = { ...this.chat.settings };
+    const p =spawnClaude(this.chat, [...STREAM_ARGS, '--include-partial-messages', ...(this.resumeArgs() || [])]);
     this.proc = p;
+    this.syncPending();
     const cmd = cfg().get('useWsl') ? 'wsl.exe' : cfg().get('claudePath') || 'claude';
     let errTail = '';
     onJsonLines(p.stdout, ev => { try { this.handle(ev); } catch (e) { console.error('[claude-lite]', e); } });
@@ -707,6 +722,7 @@ class ChatSession {
     p.on('error', err => {
       if (this.proc !== p) return;
       this.proc = null;
+      this.syncPending();
       this.push({ role: 'info', md: `> **Error:** Failed to start \`${cmd}\`: ${err.message}` });
       this.agent(`Error: failed to start ${cmd}`);
       this.setBusy(false);
@@ -716,6 +732,7 @@ class ChatSession {
       if (this.proc !== p) return; // intentional kill
       this.proc = null;
       this.bg = [];
+      this.syncPending();
       if (this.busy) {
         this.push({ role: 'info', md: `> **Error:** claude exited (code ${code})\n\n${fence('', errTail.trim() || '(no stderr)')}` });
         this.agent(`Error: claude exited (code ${code})`);
@@ -731,6 +748,7 @@ class ChatSession {
     this.bg = [];
     this.running.clear();
     if (p) try { p.kill(); } catch { /* already gone */ }
+    this.syncPending();
   }
 
   stop() {
@@ -866,8 +884,7 @@ class ChatSession {
   }
 
   onResult(ev) {
-    const restart = this.pendingRestart && !this.bg.length; // background tasks still need this process
-    if (!restart) this.proc?.stdin.write(JSON.stringify({ type: 'control_request', request_id: 'ctx', request: { subtype: 'get_context_usage' } }) + '\n');
+    this.proc?.stdin.write(JSON.stringify({ type: 'control_request', request_id: 'ctx', request: { subtype: 'get_context_usage' } }) + '\n');
     const interrupted = this.interrupted, failed = !interrupted && (ev.is_error || (ev.subtype && ev.subtype !== 'success'));
     if (interrupted) {
       this.interrupted = false;
@@ -885,7 +902,6 @@ class ChatSession {
     this.streamIdx = null;
     this.setBusy(false);
     saveChat(this.chat);
-    if (restart) { this.pendingRestart = false; this.kill(); }
   }
 
   // Live estimate while streaming; needs a known window (the CLI's exact numbers arrive via onContextUsage after each turn).

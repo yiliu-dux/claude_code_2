@@ -20,7 +20,7 @@ Then reload the VS Code window and run **Claude Lite: New Chat** (`Ctrl+Alt+N`).
 
 ## How it works
 Each chat tab runs one `claude -p --input-format stream-json --output-format stream-json` process in the chat's cwd.
-Changing a setting restarts the process with `--resume <session>`, so the conversation carries over.
+Changing a setting does nothing until you send: if the settings differ from what the running process was started with, the Send button turns into "Send + Restart" and the process is restarted with `--resume <session>` (the conversation carries over; background tasks are killed). The status note shows the setting that was actually in use, e.g. `Model: Opus -> Haiku`, and disappears if you change back.
 Thinking budget is passed via `MAX_THINKING_TOKENS`. Set `claudeLite.useWsl` to run claude inside WSL.
 
 On startup the extension compares `claude --version` with the newest published version (npm registry, using the CLI's `autoUpdatesChannel`, `latest` in WSL mode) and warns if it is out of date. It never updates on its own: the warning's **Run claude update** button runs `claude update` in a terminal. Turn the check off with `claudeLite.checkForUpdates`.
