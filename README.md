@@ -4,6 +4,7 @@ Minimal VS Code wrapper around the `claude` CLI (uses your logged-in subscriptio
 
 - **Chat tab**: a normal editor tab; responses render as markdown; `Ctrl+F` searches it.
 - **Top bar**: Chats, Refresh Models (the list is fetched from the CLI on start), a live context-usage bar, 5h/7d rate-limit usage, and Open as .md (the chat's transcript).
+- **Tool calls** (Bash, Read, Grep, ...) show their start time in the left margin (like user messages), and the duration once finished, e.g. `Bash ... (done, 3.2s)`.
 - **Status line** (under the message box): on the left, only what the agent is doing (e.g. `Running Bash: Run the tests | 12s`, `Agent "Find tests": running Grep: ...`, background tasks still running after a turn). Claude continues on its own when a background task finishes, and the chat shows as busy again. Other messages (setting changes, warnings) appear right-aligned on the same line.
 - **Bottom bar**: model / effort / thinking budget / permission mode dropdowns (scroll the mouse wheel over any of them to step through the options) and Send / Stop.
 - **Message box**: grows with what you type up to 10 lines; drag the top edge of the bottom panel to make it taller (double-click the edge to reset). The chat follows new output only while you are scrolled to the bottom.

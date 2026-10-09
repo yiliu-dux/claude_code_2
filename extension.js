@@ -148,7 +148,8 @@ function linkPaths(html, cwd) {
   }).join('');
 }
 
-function toolMd(block, result, isErr) {
+// started/ended are epoch ms: the summary shows the duration once the result is in (the start time is the margin timestamp).
+function toolMd(block, result, isErr, started, ended) {
   const i = block.input || {};
   const sum = String(i.command || i.file_path || i.pattern || i.url || i.query || i.description || i.prompt || '').split('\n')[0];
   let body;
@@ -158,7 +159,8 @@ function toolMd(block, result, isErr) {
   } else if (i.command) body = fence('sh', i.command);
   else if (i.content != null) body = fence('', trunc(String(i.content), 4000));
   else body = fence('json', trunc(JSON.stringify(i, null, 2), 4000));
-  const mark = result == null ? ' (running)' : isErr ? ' (error)' : ' (done)';
+  const secs = result != null && started && ended ? `, ${((ended - started) / 1000).toFixed(1)}s` : '';
+  const mark = result == null ? ' (running)' : isErr ? ` (error${secs})` : ` (done${secs})`;
   let md = `<details><summary><b>${esc(block.name)}</b> <code>${esc(sum.slice(0, 100))}</code>${mark}</summary>\n\n${body}\n`;
   if (result != null) md += `\n**${isErr ? 'Error' : 'Result'}**\n\n${fence('', trunc(result, 3000))}\n`;
   return md + '\n</details>';
@@ -548,11 +550,11 @@ class ChatSession {
     return idx;
   }
 
-  // Time to show beside a message: always for user messages, for agent messages only after a silence (or at the chat start).
+  // Time to show beside a message: always for user and tool messages, for agent messages only after a silence (or at the chat start).
   stamp(idx) {
     const { messages } = this.chat, m = messages[idx], prev = messages[idx - 1];
     if (!m.ts) return 0;
-    return m.role === 'user' || (m.role === 'assistant' && (!prev?.ts || m.ts - prev.ts > 1000)) ? m.ts : 0;
+    return m.role === 'user' || m.role === 'tool' || (m.role === 'assistant' && (!prev?.ts || m.ts - prev.ts > 1000)) ? m.ts : 0;
   }
 
   async upsert(idx) {
@@ -825,7 +827,8 @@ class ChatSession {
           this.streamIdx = null;
         } else this.push({ role: 'assistant', md: b.text });
       } else if (b.type === 'tool_use') {
-        this.tools.set(b.id, { idx: this.push({ role: 'tool', md: toolMd(b) }), block: b });
+        const started = Date.now();
+        this.tools.set(b.id, { idx: this.push({ role: 'tool', md: toolMd(b, null, false, started) }), block: b, started });
         this.running.set(b.id, toolLabel(b));
       }
     }
@@ -857,7 +860,7 @@ class ChatSession {
       const t = b.type === 'tool_result' && this.tools.get(b.tool_use_id);
       if (!t) continue;
       if (this.running.delete(b.tool_use_id) && this.busy) this.showRunning();
-      this.chat.messages[t.idx].md = toolMd(t.block, resultText(b.content), b.is_error);
+      this.chat.messages[t.idx].md = toolMd(t.block, resultText(b.content), b.is_error, t.started, Date.now());
       this.upsert(t.idx);
     }
   }
