@@ -425,7 +425,7 @@ function showUsage(w) {
   const parts = [['5h', lastUsage.five_hour], ['7d', lastUsage.seven_day]].map(([k, x]) =>
     !x ? `${k} ?` :
     x.resetsAt && x.resetsAt * 1000 <= Date.now() ? `${k} 0% (reset)` :
-    `${k} ${Math.round(x.utilization * 100)}% (resets in ${x.resetsAt ? relIn(x.resetsAt) : '?'})`);
+    `${Math.round(x.utilization * 100)}% (${x.resetsAt ? relIn(x.resetsAt) : '?'})`);
   const text = parts.join(' | ');
   const at = x => (x?.resetsAt ? new Date(x.resetsAt * 1000).toLocaleString() : '?');
   const title = `Claude plan usage (updated after each turn)\n5-hour window resets ${at(lastUsage.five_hour)}\nWeekly window resets ${at(lastUsage.seven_day)}`;
@@ -488,7 +488,7 @@ class ChatSession {
   async onMessage(m) {
     switch (m.type) {
       case 'ready': {
-        const messages = await Promise.all(this.chat.messages.map(async (msg, idx) => ({ idx, role: msg.role, html: await this.html(msg.md) })));
+        const messages = await Promise.all(this.chat.messages.map(async (msg, idx) => ({ idx, role: msg.role, html: await this.html(msg.md), ts: this.stamp(idx) })));
         this.post({ type: 'init', chatId: this.chat.id, settings: this.chat.settings, options: OPTIONS, messages, busy: this.busy });
         this.post({ type: 'agent', ...(this.agentState || { text: 'Ready', since: Date.now() }) });
         this.postContext();
@@ -542,9 +542,17 @@ class ChatSession {
   }
 
   push(msg) {
+    msg.ts = Date.now();
     const idx = this.chat.messages.push(msg) - 1;
     this.upsert(idx);
     return idx;
+  }
+
+  // Time to show beside a message: always for user messages, for agent messages only after a silence (or at the chat start).
+  stamp(idx) {
+    const { messages } = this.chat, m = messages[idx], prev = messages[idx - 1];
+    if (!m.ts) return 0;
+    return m.role === 'user' || (m.role === 'assistant' && (!prev?.ts || m.ts - prev.ts > 1000)) ? m.ts : 0;
   }
 
   async upsert(idx) {
@@ -553,7 +561,7 @@ class ChatSession {
     const seq = (this.renderSeq.get(idx) || 0) + 1;
     this.renderSeq.set(idx, seq);
     const html = await this.html(m.md);
-    if (this.renderSeq.get(idx) === seq) this.post({ type: 'upsert', idx, role: m.role, html });
+    if (this.renderSeq.get(idx) === seq) this.post({ type: 'upsert', idx, role: m.role, html, ts: this.stamp(idx) });
   }
 
   scheduleUpsert(idx) {

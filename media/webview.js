@@ -44,6 +44,13 @@ function upsert(m) {
   el.className = 'msg ' + m.role;
   el.innerHTML = m.html;
   if (open) { const d = el.querySelector('details'); if (d) d.open = true; }
+  if (m.ts) {
+    const t = document.createElement('span');
+    t.className = 'ts';
+    t.textContent = new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    t.title = new Date(m.ts).toLocaleString();
+    el.prepend(t);
+  }
   if (stick) toBottom();
 }
 // File links (data-file is set by the host only for paths that exist) open in an editor beside the chat.
