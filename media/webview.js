@@ -99,6 +99,7 @@ window.addEventListener('message', ({ data: m }) => {
         $(k).value = m.settings[k] ?? '';
       }
       setModel(m.settings.model || '');
+      setDeepseek(!!m.deepseek);
       log.innerHTML = '';
       m.messages.forEach(upsert);
       setBusy(m.busy);
@@ -117,18 +118,32 @@ window.addEventListener('message', ({ data: m }) => {
     case 'rate': setRate(m); break;
     case 'setting': if (m.key === 'model') setModel(m.value); else $(m.key).value = m.value; break;
     case 'models': buildModels(m); break;
+    case 'deepseek': setDeepseek(m.on); break;
   }
 });
 
+// DeepSeek toggle: the host owns the global claudeLite.deepseek.enabled setting; this only mirrors it.
+function setDeepseek(on) {
+  const b = $('deepseek');
+  b.textContent = 'DeepSeek: ' + (on ? 'on' : 'off');
+  b.className = on ? 'on' : '';
+  b.title = on ? 'Chats run against DeepSeek - model list from claudeLite.deepseek.models; click to switch back to Claude'
+    : "Click to route every chat through DeepSeek's Anthropic-compatible API (settings: claudeLite.deepseek.*)";
+}
+
 // Model dropdown: exactly what the CLI reported (no fallback list) + any custom ID + "Custom...".
 let curModel = '', models = null;
-function buildModels({ state, list, error }) {
+function buildModels({ state, list, error, source }) {
   models = list;
+  const ds = source === 'deepseek';
   const btn = $('refreshModels');
   btn.disabled = state === 'loading';
-  btn.textContent = state === 'loading' ? 'Loading models...' : state === 'error' ? 'Models failed - retry' : 'Refresh Models';
+  btn.textContent = state === 'loading' ? 'Loading models...' : state === 'error' ? 'Models failed - retry' : ds ? 'Reload Models' : 'Refresh Models';
   btn.className = state === 'error' ? 'warn' : '';
-  btn.title = state === 'error' ? 'Model list fetch failed: ' + error : state === 'ok' ? list.length + ' models from the CLI - click to re-fetch' : 'Asking the CLI for its model list...';
+  btn.title = state === 'error' ? 'Model list fetch failed: ' + error
+    : state === 'ok' ? (ds ? list.length + ' DeepSeek models (claudeLite.deepseek.models) - click to reload'
+      : list.length + ' models from the CLI - click to re-fetch')
+    : 'Asking the CLI for its model list...';
   if (state === 'error') setNote('Could not fetch model list: ' + error);
   const sel = $('model');
   sel.innerHTML = '';
@@ -189,6 +204,7 @@ $('stop').onclick = () => vscode.postMessage({ type: 'stop' });
 $('md').onclick = () => vscode.postMessage({ type: 'transcript' });
 $('chats').onclick = () => vscode.postMessage({ type: 'pickChat' });
 $('refreshModels').onclick = () => vscode.postMessage({ type: 'refreshModels' });
+$('deepseek').onclick = () => vscode.postMessage({ type: 'toggleDeepseek' });
 $('settings').onclick = () => vscode.postMessage({ type: 'settings' });
 input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
 for (const k of ['effort', 'thinking', 'permissionMode'])

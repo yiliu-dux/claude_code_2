@@ -180,6 +180,23 @@ function toolLabel(b) {
 const resultText = c => typeof c === 'string' ? c
   : Array.isArray(c) ? c.map(x => (x.type === 'text' ? x.text : `[${x.type}]`)).join('\n') : '';
 
+// ---------- DeepSeek mode: one global switch that routes every chat through DeepSeek's Anthropic-compatible API ----------
+
+// A claude process pointed at DeepSeek answers its `initialize` control request with Anthropic's built-in model
+// list (plus the env's model echoed back as "Custom model"), so the DeepSeek models come from a setting instead.
+const deepseekOn = () => !!cfg().get('deepseek.enabled');
+const deepseekModels = () => (cfg().get('deepseek.models') || '').split(',')
+  .map(v => v.trim()).filter(Boolean)
+  .map(v => ({ value: v, resolvedModel: v, displayName: v, description: 'DeepSeek', supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] }));
+const deepseekDefaultModel = () => deepseekModels()[0]?.value || '';
+// Bumped whenever the endpoint/token/window change: a process started before that holds the old values, so it
+// needs a restart. A counter, not the values, so the token is never written into a chat file.
+let dsEnvRev = 0;
+
+// The model a chat falls back to under the current provider (DeepSeek: first of its list, else the configured default).
+// Deliberately not normalized against the model list: that list still belongs to the other provider right after a switch.
+const providerDefaultModel = () => deepseekOn() ? deepseekDefaultModel() : (cfg().get('defaultModel') || '');
+
 // ---------- spawning claude (Windows or WSL) with the chat's model settings ----------
 
 const STREAM_ARGS = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'];
@@ -197,12 +214,22 @@ function spawnClaude(chat, args) {
   if (s.thinking === 'off') env.MAX_THINKING_TOKENS = '0';
   else if (/^\d+$/.test(s.thinking || '')) env.MAX_THINKING_TOKENS = s.thinking;
 
+  // Vars the child needs from our environment (WSL only forwards what WSLENV lists).
+  const forward = ['MAX_THINKING_TOKENS', 'CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING'];
+  if (deepseekOn()) {
+    env.ANTHROPIC_BASE_URL = c.get('deepseek.baseUrl') || 'https://api.deepseek.com/anthropic';
+    env.ANTHROPIC_AUTH_TOKEN = c.get('deepseek.authToken') || '';
+    env.ANTHROPIC_MODEL = s.model || deepseekDefaultModel(); // never fall back to a claude model name: DeepSeek bills it as v4-pro
+    env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(c.get('deepseek.autoCompactWindow') || '');
+    forward.push('ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_MODEL', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW');
+  }
+
   let cmd = c.get('claudePath') || 'claude', cwd = chat.cwd;
   if (c.get('useWsl')) {
     args = ['--cd', cwd, '--', 'bash', '-lc', 'exec claude "$@"', 'claude', ...args];
     cmd = 'wsl.exe';
     cwd = undefined;
-    env.WSLENV = [env.WSLENV, 'MAX_THINKING_TOKENS', 'CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING'].filter(Boolean).join(':');
+    env.WSLENV = [env.WSLENV, ...forward].filter(Boolean).join(':');
   }
   const p = cp.spawn(cmd, args, { cwd, env, windowsHide: true });
   p.stdout.setEncoding('utf8'); // decodes multi-byte characters split across chunks
@@ -249,13 +276,18 @@ function controlRequest(chat, args, request, timeoutMs = 30_000) {
 // ---------- model list: asked from the CLI itself (same data as its /model picker) ----------
 
 // No fallback list on purpose: if the fetch fails the UI says so.
-let models = { state: 'loading', list: [], error: '' }, modelFetch = null;
+let models = { state: 'loading', list: [], error: '', source: 'cli' }, modelFetch = null;
 
 // Maps an alias / ID / display name ("Opus 5.5") to the CLI's value. ok=null means "can't tell yet".
 function normalizeModel(v) {
   v = (v || '').trim();
   if (!v) return { value: '', ok: true, info: models.list.find(x => x.value === 'default') };
   if (models.state !== 'ok') return { value: v, ok: null };
+  // Match the list verbatim first: some entries carry a [1m] suffix in their value already (the CLI's own
+  // Fable, and DeepSeek's models), and the suffix handling below would strip it and never find them.
+  const eqv = s => s && s.toLowerCase() === v.toLowerCase();
+  const exact = models.list.find(x => eqv(x.value)) || models.list.find(x => eqv(x.displayName));
+  if (exact) return { value: exact.value === 'default' ? '' : exact.value, ok: true, info: exact };
   const base = v.replace(/\[1m\]$/i, ''), suffix = v.slice(base.length).toLowerCase();
   const eq = s => s && s.toLowerCase() === base.toLowerCase();
   const m = models.list.find(x => eq(x.value)) || models.list.find(x => eq(x.displayName));
@@ -270,33 +302,47 @@ function postModels(target) {
   for (const s of target ? [target] : ChatSession.sessions.values()) s.post({ type: 'models', ...models });
 }
 
+// Fix up chats whose model was set before the current list was known (e.g. "Opus 5.5" -> "opus").
+function normalizeChats() {
+  for (const s of ChatSession.sessions.values()) {
+    const m = normalizeModel(s.chat.settings.model), renamed = m.ok && m.value !== s.chat.settings.model;
+    if (m.ok === false) s.note(`Warning: model "${s.chat.settings.model}" isn't in the model list`);
+    if (renamed) s.chat.settings.model = m.value;
+    const effortFix = s.checkEffort();
+    if (effortFix) s.note(effortFix);
+    if (renamed || effortFix) saveChat(s.chat);
+    s.post({ type: 'setting', key: 'model', value: s.chat.settings.model });
+  }
+  warnDefaults();
+}
+
 // Fetched on every activation and on "Refresh Models"; resolves to the list, or null on failure.
 function fetchModels() {
   if (modelFetch) return modelFetch;
-  models = { ...models, state: 'loading', error: '' };
+  // DeepSeek mode needs no process: the CLI only knows Anthropic's models, so the list is the setting.
+  if (deepseekOn()) {
+    const list = deepseekModels();
+    models = list.length ? { state: 'ok', list, error: '', source: 'deepseek' }
+      : { state: 'error', list: [], error: 'claudeLite.deepseek.models is empty', source: 'deepseek' };
+    postModels();
+    if (models.state !== 'ok') return Promise.resolve(null);
+    normalizeChats();
+    return Promise.resolve(models.list);
+  }
+  models = { ...models, state: 'loading', error: '', source: 'cli' };
   postModels();
   return modelFetch = (async () => {
     try {
       const r = await controlRequest({ cwd: os.homedir(), settings: {} }, [], { subtype: 'initialize' });
       if (!r.models?.length) throw new Error('CLI returned no models');
-      models = { state: 'ok', list: r.models, error: '' };
+      models = { state: 'ok', list: r.models, error: '', source: 'cli' };
     } catch (e) {
-      models = { state: 'error', list: [], error: e.message };
+      models = { state: 'error', list: [], error: e.message, source: 'cli' };
     }
     modelFetch = null;
     postModels();
     if (models.state !== 'ok') return null;
-    // Fix up chats whose settings were made before the list was known (e.g. "Opus 5.5" -> "opus").
-    for (const s of ChatSession.sessions.values()) {
-      const m = normalizeModel(s.chat.settings.model), renamed = m.ok && m.value !== s.chat.settings.model;
-      if (m.ok === false) s.note(`Warning: model "${s.chat.settings.model}" isn't in the CLI's model list`);
-      if (renamed) s.chat.settings.model = m.value;
-      const effortFix = s.checkEffort();
-      if (effortFix) s.note(effortFix);
-      if (renamed || effortFix) saveChat(s.chat);
-      s.post({ type: 'setting', key: 'model', value: s.chat.settings.model });
-    }
-    warnDefaults();
+    normalizeChats();
     return models.list;
   })();
 }
@@ -318,9 +364,10 @@ const SETTING_NAMES = { model: 'Model', effort: 'Effort', thinking: 'Thinking', 
 // Returns sanitized defaults plus a list of problems (invalid values fall back to the CLI default).
 function checkDefaults() {
   const c = cfg(), problems = [];
-  const s = { model: c.get('defaultModel'), effort: c.get('defaultEffort'), thinking: c.get('defaultThinking'), permissionMode: c.get('defaultPermissionMode') };
+  // Under DeepSeek the claudeLite.defaultModel (a Claude alias) is meaningless: the first DeepSeek model is the default.
+  const s = { model: deepseekOn() ? deepseekDefaultModel() : c.get('defaultModel'), effort: c.get('defaultEffort'), thinking: c.get('defaultThinking'), permissionMode: c.get('defaultPermissionMode') };
   const m = normalizeModel(s.model);
-  if (m.ok === false) { problems.push(`Default model "${s.model}" isn't in the CLI's model list`); s.model = ''; }
+  if (m.ok === false) { problems.push(`Default model "${s.model}" isn't in the model list`); s.model = ''; }
   else s.model = m.value;
   for (const [k, list] of Object.entries(CHOICES)) {
     if (!list.includes(s[k] ?? '')) { problems.push(`Default ${k} "${s[k]}" isn't one of: ${list.filter(Boolean).join(', ')}`); s[k] = list[0]; }
@@ -458,7 +505,8 @@ class ChatSession {
     this.panel = panel;
     panel.iconPath = vscode.Uri.file(path.join(__dirname, 'icon.png'));
     this.proc = null;
-    chat.applied ??= { ...chat.settings }; // what the claude process was last started with (settings may be ahead of it)
+    chat.applied ??= { ...chat.settings, deepseek: deepseekOn() }; // what the claude process was last started with (settings may be ahead of it)
+    this.appliedDsRev = null; // DeepSeek connection settings in force when the process started (see syncPending)
     this.busy = false;
     this.streamIdx = null;
     this.tools = new Map(); // tool_use_id -> { idx, block }
@@ -492,7 +540,7 @@ class ChatSession {
     switch (m.type) {
       case 'ready': {
         const messages = await Promise.all(this.chat.messages.map(async (msg, idx) => ({ idx, role: msg.role, html: await this.html(msg.md), ts: this.stamp(idx) })));
-        this.post({ type: 'init', chatId: this.chat.id, settings: this.chat.settings, options: OPTIONS, messages, busy: this.busy });
+        this.post({ type: 'init', chatId: this.chat.id, settings: this.chat.settings, options: OPTIONS, messages, busy: this.busy, deepseek: deepseekOn() });
         this.post({ type: 'agent', ...(this.agentState || { text: 'Ready', since: Date.now() }) });
         this.syncPending();
         this.postContext();
@@ -502,6 +550,8 @@ class ChatSession {
       }
       case 'pickChat': vscode.commands.executeCommand('claudeLite.openChat'); break;
       case 'refreshModels': fetchModels(); break;
+      case 'toggleDeepseek': // global setting: onDidChangeConfiguration re-points every chat
+        await cfg().update('deepseek.enabled', !deepseekOn(), vscode.ConfigurationTarget.Global); break;
       case 'settings': vscode.commands.executeCommand('workbench.action.openSettings', '@ext:local.claude-lite'); break;
       case 'send': this.send(m.text); break;
       case 'stop': this.stop(); break;
@@ -542,6 +592,9 @@ class ChatSession {
     const { settings: s, applied: a } = this.chat;
     const changes = Object.keys(SETTING_NAMES).filter(k => (s[k] ?? '') !== (a[k] ?? ''))
       .map(k => `${SETTING_NAMES[k]}: ${label(a[k] ?? '')} -> ${label(s[k] ?? '')}`);
+    // toggling the global Claude/DeepSeek switch also needs a restart (different endpoint and model list)
+    if (!!a.deepseek !== deepseekOn()) changes.push(`Provider: ${a.deepseek ? 'DeepSeek' : 'Claude'} -> ${deepseekOn() ? 'DeepSeek' : 'Claude'}`);
+    if (deepseekOn() && this.appliedDsRev !== null && this.appliedDsRev !== dsEnvRev) changes.push('DeepSeek settings changed');
     this.post({ type: 'pending', restart: !!this.proc && changes.length > 0, changes });
     return changes.length > 0;
   }
@@ -711,7 +764,8 @@ class ChatSession {
   }
 
   start() {
-    this.chat.applied = { ...this.chat.settings };
+    this.chat.applied = { ...this.chat.settings, deepseek: deepseekOn() };
+    this.appliedDsRev = dsEnvRev;
     const p =spawnClaude(this.chat, [...STREAM_ARGS, '--include-partial-messages', ...(this.resumeArgs() || [])]);
     this.proc = p;
     this.syncPending();
@@ -1016,7 +1070,23 @@ async function searchChats() {
   if (pick) ChatSession.open(loadChat(pick.id));
 }
 
+// ---------- provider switch: flipping claudeLite.deepseek.enabled re-points every open chat ----------
+
+let providerOn = null; // last value of claudeLite.deepseek.enabled we acted on
+
+function switchProvider() {
+  for (const s of ChatSession.sessions.values()) {
+    s.chat.settings.model = providerDefaultModel();
+    saveChat(s.chat);
+    s.post({ type: 'setting', key: 'model', value: s.chat.settings.model });
+    s.post({ type: 'deepseek', on: deepseekOn() });
+    s.note(`${deepseekOn() ? 'DeepSeek' : 'Claude'} mode: model set to ${label(s.chat.settings.model) || 'default'} (restarts on next send)`);
+    s.syncPending();
+  }
+}
+
 function activate(context) {
+  providerOn = deepseekOn();
   statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusItem.command = 'claudeLite.openChat';
   usageItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
@@ -1027,6 +1097,17 @@ function activate(context) {
   checkForUpdate(); // compares `claude --version` with the npm registry; never installs on its own
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
     if (['defaultModel', 'defaultEffort', 'defaultThinking', 'defaultPermissionMode'].some(k => e.affectsConfiguration(`claudeLite.${k}`))) warnDefaults();
+    if (!e.affectsConfiguration('claudeLite.deepseek')) return;
+    // Endpoint/token/window: running processes hold the old values, so flag them for a restart (never a refetch:
+    // typing a token would otherwise spawn a claude process per keystroke).
+    if (['baseUrl', 'authToken', 'autoCompactWindow'].some(k => e.affectsConfiguration(`claudeLite.deepseek.${k}`))) dsEnvRev++;
+    if (e.affectsConfiguration('claudeLite.deepseek.enabled') && deepseekOn() !== providerOn) {
+      providerOn = deepseekOn();
+      switchProvider(); // re-points every chat and syncs it
+    } else {
+      for (const s of ChatSession.sessions.values()) s.syncPending();
+    }
+    if (e.affectsConfiguration('claudeLite.deepseek.enabled') || e.affectsConfiguration('claudeLite.deepseek.models')) fetchModels();
   }));
   const ticker = setInterval(() => showUsage(), 60_000); // keep "resets in" current
   context.subscriptions.push(

@@ -31,7 +31,12 @@
         "claudeLite.defaultEffort": { "type": "string", "enum": ["", "low", "medium", "high", "xhigh", "max"], "enumItemLabels": ["(CLI default)", "low", "medium", "high", "xhigh", "max"], "default": "", "description": "Effort level (--effort). Levels the chosen model doesn't support fall back to the CLI default." },
         "claudeLite.defaultThinking": { "type": "string", "enum": ["default", "off", "4000", "16000", "32000", "64000"], "default": "default", "description": "Thinking budget (sets MAX_THINKING_TOKENS)." },
         "claudeLite.defaultPermissionMode": { "type": "string", "enum": ["auto", "acceptEdits", "manual", "dontAsk", "plan", "bypassPermissions"], "default": "auto", "description": "No interactive prompts in this wrapper: tools that would need approval are denied (and reported)." },
-        "claudeLite.extraArgs": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Extra CLI args appended to every claude invocation." }
+        "claudeLite.extraArgs": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Extra CLI args appended to every claude invocation." },
+        "claudeLite.deepseek.enabled": { "type": "boolean", "default": false, "description": "Route every chat through DeepSeek's Anthropic-compatible API instead of Anthropic (sets ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL, CLAUDE_CODE_AUTO_COMPACT_WINDOW on each claude process). Toggled by the DeepSeek button in the chat top bar; a running chat restarts on the next send." },
+        "claudeLite.deepseek.authToken": { "type": "string", "default": "", "description": "DeepSeek API key, sent as ANTHROPIC_AUTH_TOKEN while DeepSeek mode is on. Stored in settings.json in plain text (and synced if Settings Sync is on)." },
+        "claudeLite.deepseek.baseUrl": { "type": "string", "default": "https://api.deepseek.com/anthropic", "description": "DeepSeek's Anthropic-compatible base URL (ANTHROPIC_BASE_URL) used while DeepSeek mode is on." },
+        "claudeLite.deepseek.models": { "type": "string", "default": "deepseek-flash[1m]", "description": "Comma-separated model IDs offered in the model dropdown while DeepSeek mode is on. The CLI cannot list DeepSeek's models itself, so this setting is the list. Append [1m] for the 1M context window." },
+        "claudeLite.deepseek.autoCompactWindow": { "type": "string", "default": "786432", "description": "Context window Claude Code uses for auto-compaction in DeepSeek mode (CLAUDE_CODE_AUTO_COMPACT_WINDOW). 786432 (768k) is DeepSeek's recommended value for the [1m] models." }
       }
     }
   }
