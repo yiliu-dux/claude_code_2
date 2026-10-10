@@ -154,7 +154,7 @@ function buildModels({ state, list, error, source }) {
     sel.add(o);
   }
   sel.add(new Option('Custom...', '__custom'));
-  setModel(curModel);
+  if (state !== 'loading') setModel(curModel); // while loading, the placeholder stays selected
 }
 function setModel(v) {
   const sel = $('model');

@@ -77,7 +77,10 @@ function fence(lang, s) {
   return `${t}${lang}\n${s}\n${t}`;
 }
 
-async function render(md) {
+// User text is shown verbatim: markdown would collapse repeated blank lines and turn a line starting
+// with "# " into a heading. Everything the agent writes (assistant/tool/info) is markdown and renders through the CLI's renderer.
+async function render(md, role) {
+  if (role === 'user') return `<p>${esc(md)}</p>`;
   try { return await vscode.commands.executeCommand('markdown.api.render', md); }
   catch { return `<pre>${esc(md)}</pre>`; }
 }
@@ -324,10 +327,9 @@ function fetchModels() {
     const list = deepseekModels();
     models = list.length ? { state: 'ok', list, error: '', source: 'deepseek' }
       : { state: 'error', list: [], error: 'claudeLite.deepseek.models is empty', source: 'deepseek' };
+    if (models.state === 'ok') normalizeChats();
     postModels();
-    if (models.state !== 'ok') return Promise.resolve(null);
-    normalizeChats();
-    return Promise.resolve(models.list);
+    return Promise.resolve(models.state === 'ok' ? models.list : null);
   }
   models = { ...models, state: 'loading', error: '', source: 'cli' };
   postModels();
@@ -340,10 +342,10 @@ function fetchModels() {
       models = { state: 'error', list: [], error: e.message, source: 'cli' };
     }
     modelFetch = null;
+    // Normalize first, so the webview rebuilds the dropdown around the final value instead of keeping a stale "(custom)".
+    if (models.state === 'ok') normalizeChats();
     postModels();
-    if (models.state !== 'ok') return null;
-    normalizeChats();
-    return models.list;
+    return models.state === 'ok' ? models.list : null;
   })();
 }
 
@@ -534,12 +536,12 @@ class ChatSession {
   agent(text) { this.agentState = { text, since: Date.now() }; this.post({ type: 'agent', ...this.agentState }); }
   // Status line, right: everything that isn't agent activity (setting changes, warnings, wrapper errors).
   note(text) { this.post({ type: 'note', text }); }
-  async html(md) { return linkPaths(await render(md), this.chat.cwd); }
+  async html(md, role) { return linkPaths(await render(md, role), this.chat.cwd); }
 
   async onMessage(m) {
     switch (m.type) {
       case 'ready': {
-        const messages = await Promise.all(this.chat.messages.map(async (msg, idx) => ({ idx, role: msg.role, html: await this.html(msg.md), ts: this.stamp(idx) })));
+        const messages = await Promise.all(this.chat.messages.map(async (msg, idx) => ({ idx, role: msg.role, html: await this.html(msg.md, msg.role), ts: this.stamp(idx) })));
         this.post({ type: 'init', chatId: this.chat.id, settings: this.chat.settings, options: OPTIONS, messages, busy: this.busy, deepseek: deepseekOn() });
         this.post({ type: 'agent', ...(this.agentState || { text: 'Ready', since: Date.now() }) });
         this.syncPending();
@@ -627,7 +629,7 @@ class ChatSession {
     if (!m) return;
     const seq = (this.renderSeq.get(idx) || 0) + 1;
     this.renderSeq.set(idx, seq);
-    const html = await this.html(m.md);
+    const html = await this.html(m.md, m.role);
     if (this.renderSeq.get(idx) === seq) this.post({ type: 'upsert', idx, role: m.role, html, ts: this.stamp(idx) });
   }
 
@@ -1077,8 +1079,7 @@ let providerOn = null; // last value of claudeLite.deepseek.enabled we acted on
 function switchProvider() {
   for (const s of ChatSession.sessions.values()) {
     s.chat.settings.model = providerDefaultModel();
-    saveChat(s.chat);
-    s.post({ type: 'setting', key: 'model', value: s.chat.settings.model });
+    saveChat(s.chat); // not posted yet: normalizeChats() sends the normalized value once the new model list is in
     s.post({ type: 'deepseek', on: deepseekOn() });
     s.note(`${deepseekOn() ? 'DeepSeek' : 'Claude'} mode: model set to ${label(s.chat.settings.model) || 'default'} (restarts on next send)`);
     s.syncPending();
