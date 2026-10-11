@@ -44,6 +44,7 @@ function upsert(m) {
   el.className = 'msg ' + m.role;
   el.innerHTML = m.html;
   if (open) { const d = el.querySelector('details'); if (d) d.open = true; }
+  if (isFinding()) findSoon(); // keep the match list in step with new/updated output
   if (m.ts) {
     const t = document.createElement('span');
     t.className = 'ts';
@@ -93,6 +94,7 @@ function setRate({ text, title }) {
 window.addEventListener('message', ({ data: m }) => {
   switch (m.type) {
     case 'init':
+      findReset(); // the log is rebuilt from scratch
       vscode.setState({ chatId: m.chatId });
       for (const [k, opts] of Object.entries(m.options)) {
         $(k).replaceChildren(...opts.map(([v, label]) => new Option(label, v)));
@@ -209,6 +211,99 @@ $('settings').onclick = () => vscode.postMessage({ type: 'settings' });
 input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
 for (const k of ['effort', 'thinking', 'permissionMode'])
   $(k).addEventListener('change', () => vscode.postMessage({ type: 'setting', key: k, value: $(k).value.trim() }));
+// ---------- find bar ----------
+// The page owns Ctrl+F: VS Code's built-in webview find widget cannot be used here (claudeLite.chat
+// creates the panel with enableFindWidget: false) because hiding that widget focuses the webview, and
+// that focus makes VS Code un-maximize the panel while this tab is the group's active editor.
+// Matches are DOM ranges over the rendered log, painted with the CSS Custom Highlight API.
+const findBar = $('find'), findInput = $('findinput'), findCount = $('findcount');
+let findHits = [], findAll = null, findAt = -1, findTimer = 0;
+const isFinding = () => findBar.classList.contains('on');
+
+function findPaint() {
+  if (findAll && findHits.length) {
+    const cur = new Highlight();
+    cur.priority = 1; // the current match over the other matches
+    if (findAt >= 0) cur.add(findHits[findAt]);
+    CSS.highlights.set('cl-found', findAll);
+    CSS.highlights.set('cl-current', cur);
+    findCount.textContent = (findAt + 1) + '/' + findHits.length;
+  } else {
+    CSS.highlights.delete('cl-found');
+    CSS.highlights.delete('cl-current');
+    findCount.textContent = '0/0';
+  }
+}
+// Jumping to a match is our own scroll: keep the resize observer from re-pinning the view to the bottom.
+function findScroll() {
+  const r = findHits[findAt].getBoundingClientRect(), s = scroller.getBoundingClientRect();
+  stick = false;
+  scroller.scrollTop += r.top - s.top - s.height / 3;
+  stick = atBottom();
+}
+// Every occurrence of the query in the rendered log (timestamps left out), case-insensitively.
+function findCollect(q) {
+  const hits = [], needle = q.toLowerCase(), walk = document.createTreeWalker(log, NodeFilter.SHOW_TEXT);
+  for (let node; (node = walk.nextNode());) {
+    if (node.parentElement.closest('.ts')) continue;
+    const hay = node.data.toLowerCase();
+    for (let i = hay.indexOf(needle); i >= 0; i = hay.indexOf(needle, i + needle.length)) {
+      const r = new Range();
+      r.setStart(node, i);
+      r.setEnd(node, i + needle.length);
+      hits.push(r);
+    }
+  }
+  return hits;
+}
+// Like the built-in find, start at the first match that is not above the current scroll position.
+function findFromHere() {
+  const top = scroller.getBoundingClientRect().top;
+  for (let i = 0; i < findHits.length && i < 500; i++) if (findHits[i].getBoundingClientRect().top >= top - 8) return i;
+  return 0;
+}
+function findRun() {
+  clearTimeout(findTimer);
+  findTimer = 0;
+  findHits = findInput.value ? findCollect(findInput.value) : [];
+  findAll = findHits.length ? new Highlight() : null;
+  if (findAll) for (const r of findHits) findAll.add(r);
+  findAt = findHits.length ? findFromHere() : -1;
+  findPaint();
+  if (findAt >= 0) findScroll();
+}
+const findSchedule = (ms = 80) => { clearTimeout(findTimer); findTimer = setTimeout(findRun, ms); };        // typing: wait for a pause
+const findSoon = (ms = 80) => { if (!findTimer) findTimer = setTimeout(findRun, ms); };                     // output: refresh at most this often
+function findReset() {
+  clearTimeout(findTimer);
+  findTimer = 0;
+  findBar.classList.remove('on');
+  findHits = []; findAll = null; findAt = -1;
+  findPaint();
+}
+function findOpen() {
+  findBar.classList.add('on');
+  findInput.focus();
+  findInput.select();
+  if (findInput.value) findRun(); // reopening a previous query keeps it
+}
+function findClose() { findReset(); input.focus(); }
+function findStep(step) {
+  if (!findHits.length) return;
+  findAt = (findAt + step + findHits.length) % findHits.length;
+  findPaint();
+  findScroll();
+}
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); findOpen(); }
+  else if (e.key === 'Escape' && isFinding()) { e.preventDefault(); findClose(); }
+});
+findInput.addEventListener('input', () => findSchedule());
+findInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); findStep(e.shiftKey ? -1 : 1); } });
+$('findprev').onclick = () => findStep(-1);
+$('findnext').onclick = () => findStep(1);
+$('findclose').onclick = findClose;
+
 vscode.postMessage({ type: 'ready' });
 autoResize();
 input.focus();

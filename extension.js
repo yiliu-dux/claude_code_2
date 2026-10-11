@@ -495,8 +495,12 @@ class ChatSession {
   static open(chat, panel) {
     const existing = ChatSession.sessions.get(chat.id);
     if (existing && !panel) { existing.panel.reveal(); return existing; }
+    // enableFindWidget must stay off: VS Code keeps that find widget alive with the webview, and when
+    // the panel is maximized (= the editor part is hidden) the webview is released, which hides the
+    // widget and makes it focus the webview; that focus makes VS Code un-maximize the panel right away.
+    // The page implements Ctrl+F itself instead (media/webview.js, documented in CLAUDE.md).
     panel ??= vscode.window.createWebviewPanel('claudeLite.chat', chat.title, vscode.ViewColumn.Active,
-      { ...webviewOptions(), enableFindWidget: true, retainContextWhenHidden: true });
+      { ...webviewOptions(), enableFindWidget: false, retainContextWhenHidden: true });
     const s = new ChatSession(chat, panel);
     ChatSession.sessions.set(chat.id, s);
     return s;
