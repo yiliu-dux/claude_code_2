@@ -38,5 +38,9 @@ try {
 } finally { $zip.Dispose() }
 
 Write-Host "Built $vsix"
+$env:NODE_NO_WARNINGS = '1' # suppress DEP0169 warning
 code --install-extension $vsix --force
+$env:NODE_NO_WARNINGS = '0'
+$wslVsixPath = $(wsl -d Ubuntu -- wslpath -u "$($vsix -replace '\\', '/')")
+wsl -d Ubuntu -- bash -lc "code --install-extension '$wslVsixPath' --force"
 Write-Host 'Installed. Run "Developer: Reload Window" in VS Code, then "Claude Lite: New Chat" (Ctrl+Alt+N).'

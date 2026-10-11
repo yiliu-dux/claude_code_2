@@ -642,7 +642,22 @@ class ChatSession {
     this.renderTimers.set(idx, setTimeout(() => { this.renderTimers.delete(idx); this.upsert(idx); }, 120));
   }
 
-  setBusy(b) { this.busy = b; this.post({ type: 'busy', busy: b }); }
+  setBusy(b) {
+    this.busy = b;
+    this.post({ type: 'busy', busy: b });
+    clearInterval(this.ctxTimer);
+    // this.ctxTimer = b ? setInterval(() => this.requestContext(), 5000) : null; // refresh the context bar while a turn runs
+    if (b) {
+      this.requestContext();
+      this.ctxTimer = setInterval(() => this.requestContext(), 5000);
+    } else {
+      this.ctxTimer = null;
+    }
+  }
+
+  requestContext() {
+    this.proc?.stdin.write(JSON.stringify({ type: 'control_request', request_id: 'ctx', request: { subtype: 'get_context_usage' } }) + '\n');
+  }
 
   send(text) {
     text = text.trim();
@@ -911,6 +926,7 @@ class ChatSession {
       }
     }
     if ((msg.content || []).some(b => b.type === 'tool_use')) this.showRunning();
+    this.requestContext();
   }
 
   // Status for the tools still waiting for a result; none left = Claude is on the next request.
@@ -944,7 +960,7 @@ class ChatSession {
   }
 
   onResult(ev) {
-    this.proc?.stdin.write(JSON.stringify({ type: 'control_request', request_id: 'ctx', request: { subtype: 'get_context_usage' } }) + '\n');
+    this.requestContext();
     const interrupted = this.interrupted, failed = !interrupted && (ev.is_error || (ev.subtype && ev.subtype !== 'success'));
     if (interrupted) {
       this.interrupted = false;
@@ -1015,7 +1031,7 @@ function pickChat() {
   const B = { archive: icon('archive', 'Archive'), unarchive: icon('reply', 'Unarchive'), del: icon('trash', 'Delete permanently') };
   const qp = vscode.window.createQuickPick();
   qp.matchOnDescription = qp.matchOnDetail = true;
-  let archived = false;
+  let archived = false, confirming = false;
   const refresh = () => {
     const dir = archived ? archiveDir() : chatsDir();
     qp.title = archived ? 'Archived chats' : 'Chats';
@@ -1035,9 +1051,9 @@ function pickChat() {
   qp.onDidTriggerItemButton(async ({ item, button }) => {
     const dir = archived ? archiveDir() : chatsDir();
     if (button === B.del) {
-      qp.ignoreFocusOut = true;
+      confirming = true; // the modal steals focus and can hide the picker; keep it alive and re-show it below
       const ok = await vscode.window.showWarningMessage(`Delete "${item.label}"? This cannot be undone.`, { modal: true }, 'Delete');
-      qp.ignoreFocusOut = false;
+      confirming = false;
       if (ok) {
         closeTab(item.id);
         for (const ext of ['json', 'md']) fs.rmSync(path.join(dir, `${item.id}.${ext}`), { force: true });
@@ -1056,7 +1072,7 @@ function pickChat() {
     qp.hide();
     ChatSession.open(loadChat(pick.id));
   });
-  qp.onDidHide(() => qp.dispose());
+  qp.onDidHide(() => { if (!confirming) qp.dispose(); });
   refresh();
   qp.show();
 }
