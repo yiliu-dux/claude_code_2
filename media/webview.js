@@ -7,8 +7,11 @@ const scroller = $('scroller');
 // doesn't fire scroll events, so this keeps its value until the user scrolls away.
 let stick = true;
 const atBottom = () => scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 30;
-const toBottom = () => { scroller.scrollTop = scroller.scrollHeight; };
-scroller.addEventListener('scroll', () => { stick = atBottom(); });
+// Scroll events arrive a frame after toBottom(); if more output landed meanwhile, atBottom() would be false
+// and wrongly un-stick, so events that merely report our own scroll position are ignored.
+let pinnedTop = -1;
+const toBottom = () => { scroller.scrollTop = scroller.scrollHeight; pinnedTop = scroller.scrollTop; };
+scroller.addEventListener('scroll', () => { if (scroller.scrollTop !== pinnedTop) stick = atBottom(); });
 // The log area shrinks when the message box grows; stay pinned if we were at the bottom.
 new ResizeObserver(() => { if (stick) toBottom(); }).observe(scroller);
 
