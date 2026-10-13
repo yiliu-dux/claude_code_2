@@ -53,7 +53,7 @@ claude -p --input-format stream-json --output-format stream-json --verbose --inc
 
 ### Webview protocol (`postMessage`)
 
-- webview → host: `ready`, `send`, `stop`, `setting`, `customModel`, `pickChat`, `refreshModels`, `settings`, `transcript`, `open` (file, line, col)
+- webview → host: `ready`, `send`, `stop`, `setting`, `customModel`, `pickChat`, `refreshModels`, `settings`, `transcript`, `open` (file, line, col), `navigate` (back; mouse4/5 pressed in the page, run as editor back/forward)
 - host → webview: `init`, `upsert` (idx, role, rendered html), `busy`, `pending` (restart, changes), `ctx`, `agent` (text, since), `note`, `rate`, `setting` (key, value - host-side changes, e.g. model normalized or unsupported effort reset), `models`, `prefill`
 
 Messages are addressed by index in `chat.messages`; `upsert` creates or replaces the element `#m<idx>`.

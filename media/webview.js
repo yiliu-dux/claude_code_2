@@ -301,6 +301,10 @@ document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); findOpen(); }
   else if (e.key === 'Escape' && isFinding()) { e.preventDefault(); findClose(); }
 });
+// Mouse back/forward buttons never reach VS Code while the webview has focus; forward them as editor navigation.
+document.addEventListener('mouseup', e => {
+  if (e.button === 3 || e.button === 4) { e.preventDefault(); vscode.postMessage({ type: 'navigate', back: e.button === 3 }); }
+});
 findInput.addEventListener('input', () => findSchedule());
 findInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); findStep(e.shiftKey ? -1 : 1); } });
 $('findprev').onclick = () => findStep(-1);

@@ -572,6 +572,7 @@ class ChatSession {
         break;
       }
       case 'transcript': openTranscript(this.chat); break;
+      case 'navigate': vscode.commands.executeCommand(m.back ? 'workbench.action.navigateBack' : 'workbench.action.navigateForward'); break;
       case 'open': {
         const pos = new vscode.Position(Math.max(0, m.line - 1), Math.max(0, m.col - 1));
         vscode.commands.executeCommand('vscode.open', vscode.Uri.file(m.file), { viewColumn: vscode.ViewColumn.Beside, selection: new vscode.Range(pos, pos) })
