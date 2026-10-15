@@ -118,7 +118,7 @@ window.addEventListener('message', ({ data: m }) => {
       break;
     case 'prefill': input.value = m.text; autoResize(); syncSend(); input.focus(); break;
     case 'ctx': setCtx(m); break;
-    case 'agent': agentMsg = m; showAgent(); break;
+    case 'agent': agentMsg = { text: m.text, since: Date.now() - m.age }; showAgent(); break;
     case 'note': setNote(m.text); break;
     case 'rate': setRate(m); break;
     case 'setting': if (m.key === 'model') setModel(m.value); else $(m.key).value = m.value; break;
@@ -265,18 +265,19 @@ function findFromHere() {
   for (let i = 0; i < findHits.length && i < 500; i++) if (findHits[i].getBoundingClientRect().top >= top - 8) return i;
   return 0;
 }
-function findRun() {
+// jump = false (refresh after new output) keeps the current match and never moves the view.
+function findRun(jump = true) {
   clearTimeout(findTimer);
   findTimer = 0;
   findHits = findInput.value ? findCollect(findInput.value) : [];
   findAll = findHits.length ? new Highlight() : null;
   if (findAll) for (const r of findHits) findAll.add(r);
-  findAt = findHits.length ? findFromHere() : -1;
+  findAt = !findHits.length ? -1 : jump ? findFromHere() : Math.min(Math.max(findAt, 0), findHits.length - 1);
   findPaint();
-  if (findAt >= 0) findScroll();
+  if (jump && findAt >= 0) findScroll();
 }
 const findSchedule = (ms = 80) => { clearTimeout(findTimer); findTimer = setTimeout(findRun, ms); };        // typing: wait for a pause
-const findSoon = (ms = 80) => { if (!findTimer) findTimer = setTimeout(findRun, ms); };                     // output: refresh at most this often
+const findSoon = (ms = 80) => { if (!findTimer) findTimer = setTimeout(() => findRun(false), ms); };       // output: refresh at most this often
 function findReset() {
   clearTimeout(findTimer);
   findTimer = 0;

@@ -537,7 +537,12 @@ class ChatSession {
 
   post(m) { if (!this.disposed) this.panel.webview.postMessage(m); }
   // Status line, left: what the agent is doing (the webview adds a running timer while busy). Nothing else goes there.
-  agent(text) { this.agentState = { text, since: Date.now() }; this.post({ type: 'agent', ...this.agentState }); }
+  agent(text) { this.agentState = { text, since: Date.now() }; this.postAgent(); }
+  // Sends the age, not the timestamp: the webview's clock can differ from the host's, which showed negative times.
+  postAgent() {
+    const { text, since } = this.agentState || { text: 'Ready', since: Date.now() };
+    this.post({ type: 'agent', text, age: Date.now() - since });
+  }
   // Status line, right: everything that isn't agent activity (setting changes, warnings, wrapper errors).
   note(text) { this.post({ type: 'note', text }); }
   async html(md, role) { return linkPaths(await render(md, role), this.chat.cwd); }
@@ -547,7 +552,7 @@ class ChatSession {
       case 'ready': {
         const messages = await Promise.all(this.chat.messages.map(async (msg, idx) => ({ idx, role: msg.role, html: await this.html(msg.md, msg.role), ts: this.stamp(idx) })));
         this.post({ type: 'init', chatId: this.chat.id, settings: this.chat.settings, options: OPTIONS, messages, busy: this.busy, deepseek: deepseekOn() });
-        this.post({ type: 'agent', ...(this.agentState || { text: 'Ready', since: Date.now() }) });
+        this.postAgent();
         this.syncPending();
         this.postContext();
         showUsage();
