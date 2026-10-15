@@ -55,6 +55,18 @@ function upsert(m) {
     t.title = new Date(m.ts).toLocaleString();
     el.prepend(t);
   }
+  if (m.role === 'user' && !m.rewound) {
+    const bar = document.createElement('span');
+    bar.className = 'acts';
+    for (const [type, tip] of [['rewind', 'Rewind the conversation and file edits to just before this message'], ['fork', 'Fork a new chat from just before this message']]) {
+      const b = document.createElement('button');
+      b.textContent = type[0].toUpperCase() + type.slice(1);
+      b.title = tip;
+      b.onclick = () => vscode.postMessage({ type, idx: m.idx });
+      bar.append(b);
+    }
+    el.append(bar);
+  }
   if (stick) toBottom();
 }
 // File links (data-file is set by the host only for paths that exist) open in an editor beside the chat.

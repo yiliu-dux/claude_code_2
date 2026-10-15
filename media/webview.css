@@ -50,6 +50,8 @@ body { --find-all: #ffff00ff; --find-cur: #ff9632ff; --find-fg: #000; }
 .msg.tool .ts { top: 0; }
 .msg.user { background: var(--vscode-textBlockQuote-background); border-left: 3px solid var(--vscode-textLink-foreground); padding: 6px 10px; border-radius: 5px; }
 .msg.user p { margin-block: 0; white-space: pre-wrap; }
+.msg .acts { position: absolute; top: 5px; right: 5px; display: none; gap: 0; background: var(--vscode-editor-background); border-radius: 5px; }
+.msg:hover .acts { display: flex; }
 .msg.tool { font-size: 12px; opacity: .9; margin: 4px 0; }
 .msg.tool summary { cursor: pointer; }
 .msg.info { opacity: .85; }

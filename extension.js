@@ -566,6 +566,8 @@ class ChatSession {
       case 'settings': vscode.commands.executeCommand('workbench.action.openSettings', '@ext:local.claude-lite'); break;
       case 'send': this.send(m.text); break;
       case 'stop': this.stop(); break;
+      case 'rewind': this.rewind(m.idx); break;
+      case 'fork': this.fork(m.idx); break;
       case 'setting': this.applySetting(m.key, m.value); break;
       case 'customModel': {
         const v = await vscode.window.showInputBox({ prompt: 'Model alias or full ID', value: this.chat.settings.model || '', placeHolder: 'e.g. claude-opus-5-5 or opus[1m]' });
@@ -717,17 +719,18 @@ class ChatSession {
   // Rewind: drop a user message and everything after it. The CLI session is resumed (as a fork) only up to the
   // last assistant message before it. Files changed by Edit/Write since that message are restored through the
   // CLI's file checkpoints (changes made via Bash are not tracked).
-  async rewind() {
+  async rewind(at) { // at = message index (message buttons); otherwise ask
     if (this.busy) return this.note('Wait for the current turn to finish before rewinding');
     const users = this.chat.messages.map((m, idx) => ({ m, idx })).filter(x => x.m.role === 'user' && !x.m.rewound);
     if (!users.length) return this.note('Nothing to rewind');
-    const pick = await vscode.window.showQuickPick(users.reverse().map(({ m, idx }) => ({
+    const pick = at !== undefined ? { idx: at } : await vscode.window.showQuickPick(users.reverse().map(({ m, idx }) => ({
       label: m.md.replace(/\s+/g, ' ').slice(0, 80),
       description: m.resumeAt === undefined ? 'cannot rewind (saved before /rewind support)' : '',
       idx,
     })), { placeHolder: 'Rewind the conversation and Claude\'s file edits (Edit/Write) to just before this message' });
     if (!pick || this.busy) return;
     const target = this.chat.messages[pick.idx];
+    if (target?.role !== 'user' || target.rewound) return;
     if (target.resumeAt === undefined) return this.note('This message predates /rewind support');
     this.kill();
     const sid = this.chat.sessionId || this.chat.forkFrom;
@@ -762,20 +765,24 @@ class ChatSession {
   }
 
   // Fork: new chat tab whose first turn resumes this session with --fork-session.
-  fork() {
+  // With `at` (a user message index), forks from just before that message instead of the end.
+  fork(at) {
     if (this.busy) return this.note('Wait for the current turn to finish before forking');
-    if (!this.resumeArgs()) return this.push({ role: 'info', md: '> /fork needs an existing conversation - send a message first.' });
-    saveChat(this.chat);
-    const c = this.chat, f = Object.assign(newChat(), {
+    const c = this.chat, target = c.messages[at];
+    if (at !== undefined && (target?.role !== 'user' || target.resumeAt === undefined)) return this.note('Cannot fork from this message');
+    if (at === undefined && !this.resumeArgs()) return this.push({ role: 'info', md: '> /fork needs an existing conversation - send a message first.' });
+    saveChat(c);
+    const sid = c.sessionId || c.forkFrom;
+    const f = Object.assign(newChat(), {
       title: `Fork: ${c.title}`.slice(0, 70),
       cwd: c.cwd,
       settings: { ...c.settings },
-      context: c.context && { ...c.context },
+      context: at === undefined && c.context ? { ...c.context } : null,
       // Not sent anything yet (fresh fork / after a rewind)? Then fork from the same point this chat would.
-      forkFrom: c.sessionId || c.forkFrom,
-      resumeAt: c.sessionId ? null : c.resumeAt,
-      lastUuid: c.lastUuid,
-      messages: [...JSON.parse(JSON.stringify(c.messages)), { role: 'info', md: `> Forked from "${c.title}"` }],
+      ...at !== undefined
+        ? { forkFrom: target.resumeAt ? sid : null, resumeAt: target.resumeAt, lastUuid: target.resumeAt }
+        : { forkFrom: sid, resumeAt: c.sessionId ? null : c.resumeAt, lastUuid: c.lastUuid },
+      messages: [...JSON.parse(JSON.stringify(at === undefined ? c.messages : c.messages.slice(0, at))), { role: 'info', md: `> Forked from "${c.title}"` }],
     });
     saveChat(f);
     ChatSession.open(f);
