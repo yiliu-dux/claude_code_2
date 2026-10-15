@@ -62,8 +62,8 @@ function saveChat(chat) {
 function toMarkdown(chat) {
   const head = `# ${chat.title}\n\n_${new Date(chat.created).toLocaleString()} | cwd \`${chat.cwd}\` | session \`${chat.sessionId || '-'}\`_\n`;
   const body = chat.messages.map(m =>
-    m.role === 'user' ? `## You\n\n${m.md}` :
-    m.role === 'assistant' ? `## Claude\n\n${m.md}` : m.md);
+    m.role === 'user' ? `## You${m.rewound ? ' (rewound)' : ''}\n\n${m.md}` :
+    m.role === 'assistant' ? `## Claude${m.rewound ? ' (rewound)' : ''}\n\n${m.md}` : m.md);
   return [head, ...body].join('\n\n') + '\n';
 }
 
@@ -550,7 +550,7 @@ class ChatSession {
   async onMessage(m) {
     switch (m.type) {
       case 'ready': {
-        const messages = await Promise.all(this.chat.messages.map(async (msg, idx) => ({ idx, role: msg.role, html: await this.html(msg.md, msg.role), ts: this.stamp(idx) })));
+        const messages = await Promise.all(this.chat.messages.map(async (msg, idx) => ({ idx, role: msg.role, rewound: msg.rewound, html: await this.html(msg.md, msg.role), ts: this.stamp(idx) })));
         this.post({ type: 'init', chatId: this.chat.id, settings: this.chat.settings, options: OPTIONS, messages, busy: this.busy, deepseek: deepseekOn() });
         this.postAgent();
         this.syncPending();
@@ -640,7 +640,7 @@ class ChatSession {
     const seq = (this.renderSeq.get(idx) || 0) + 1;
     this.renderSeq.set(idx, seq);
     const html = await this.html(m.md, m.role);
-    if (this.renderSeq.get(idx) === seq) this.post({ type: 'upsert', idx, role: m.role, html, ts: this.stamp(idx) });
+    if (this.renderSeq.get(idx) === seq) this.post({ type: 'upsert', idx, role: m.role, rewound: m.rewound, html, ts: this.stamp(idx) });
   }
 
   scheduleUpsert(idx) {
@@ -719,7 +719,7 @@ class ChatSession {
   // CLI's file checkpoints (changes made via Bash are not tracked).
   async rewind() {
     if (this.busy) return this.note('Wait for the current turn to finish before rewinding');
-    const users = this.chat.messages.map((m, idx) => ({ m, idx })).filter(x => x.m.role === 'user');
+    const users = this.chat.messages.map((m, idx) => ({ m, idx })).filter(x => x.m.role === 'user' && !x.m.rewound);
     if (!users.length) return this.note('Nothing to rewind');
     const pick = await vscode.window.showQuickPick(users.reverse().map(({ m, idx }) => ({
       label: m.md.replace(/\s+/g, ' ').slice(0, 80),
@@ -747,7 +747,7 @@ class ChatSession {
       this.note('');
       if (this.disposed) return; // tab closed (or chat deleted) meanwhile
     }
-    this.chat.messages.length = pick.idx;
+    this.chat.messages.slice(pick.idx).forEach(m => { m.rewound = true; }); // kept for the record, no longer part of the session
     this.chat.messages.push({ role: 'info', md: `> Rewound to before: "${target.md.replace(/\s+/g, ' ').slice(0, 60)}"\n>\n> ${files}` });
     this.chat.lastUuid = target.resumeAt;
     this.chat.sessionId = null;

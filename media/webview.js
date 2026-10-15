@@ -44,7 +44,7 @@ function upsert(m) {
   let el = $('m' + m.idx);
   if (!el) { el = document.createElement('div'); el.id = 'm' + m.idx; log.appendChild(el); }
   const open = el.querySelector('details')?.open;
-  el.className = 'msg ' + m.role;
+  el.className = 'msg ' + m.role + (m.rewound ? ' rewound' : '');
   el.innerHTML = m.html;
   if (open) { const d = el.querySelector('details'); if (d) d.open = true; }
   if (isFinding()) findSoon(); // keep the match list in step with new/updated output
