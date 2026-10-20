@@ -9,6 +9,7 @@
   "main": "./extension.js",
   "activationEvents": ["onWebviewPanel:claudeLite.chat"],
   "contributes": {
+    "markdown.markdownItPlugins": true,
     "commands": [
       { "command": "claudeLite.newChat", "title": "Claude Lite: New Chat" },
       { "command": "claudeLite.openChat", "title": "Claude Lite: Open Chat..." },

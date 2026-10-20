@@ -12,6 +12,8 @@ A lightweight VS Code extension that wraps the `claude` CLI (Claude Code) so the
 
 There is **no Node.js on the Windows side**, no `node_modules`, no bundler, no TypeScript. Do not add npm dependencies. If you need a library, find a way to do it with Node built-ins or VS Code APIs (e.g. markdown is rendered with the built-in `markdown.api.render` command).
 
+- `extendMarkdownIt()` (exported through `activate()`'s return value, enabled by `markdown.markdownItPlugins` in package.json) lets `N. text` lines end a paragraph even when N is not 1. VS Code applies it to `markdown.api.render` and to the built-in preview, so the transcript `.md` files render the same in both. Untested against the real parser until reloaded; check a chat with `**Label**` directly followed by `4. item`.
+
 ## Build, install, verify
 
 ```powershell

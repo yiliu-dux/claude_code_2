@@ -1166,6 +1166,7 @@ function activate(context) {
       },
     }),
   );
+  return { extendMarkdownIt };
 }
 
 function deactivate() {
@@ -1183,6 +1184,18 @@ function webviewHtml(webview) {
     .replace(/\{\{cspSource\}\}/g, webview.cspSource)
     .replace('{{css}}', uri('webview.css'))
     .replace('{{js}}', uri('webview.js'));
+}
+
+// CommonMark only lets an ordered list interrupt a paragraph if it starts at 1, so a list "4. ..." right after
+// a "**Method**" line renders as one paragraph. The agent writes such lists (numbering continues across headings). This markdown-it plugin (contributed in
+// package.json, applied by VS Code to markdown.api.render and to the built-in preview) lets any "N. text" line end a paragraph.
+function extendMarkdownIt(md) {
+  md.block.ruler.before('list', 'orderedListInterrupt', (state, startLine, endLine, silent) => {
+    if (!silent || state.parentType !== 'paragraph' || state.sCount[startLine] - state.blkIndent > 3) return false;
+    const pos = state.bMarks[startLine] + state.tShift[startLine];
+    return /^\d{1,9}[.)] +\S/.test(state.src.slice(pos, state.eMarks[startLine]));
+  }, { alt: ['paragraph'] });
+  return md;
 }
 
 module.exports = { activate, deactivate };
