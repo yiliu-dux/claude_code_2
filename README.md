@@ -12,6 +12,8 @@ Minimal VS Code wrapper around the `claude` CLI (uses your logged-in subscriptio
 - **File links**: file paths in the output (relative, absolute, `~/`, with optional `:line[:col]` or `#L<line>`) become links that open the file beside the chat at that line. Only files that exist are linked; WSL paths (`/mnt/c/...`, `/home/...`) and Git Bash paths (`/c/...`) are mapped to Windows ones.
 - **History**: every chat is saved to `~/.claude-lite/chats/<id>.json` + `<id>.md`. Use `Claude Lite: Open Chat…`, `Search All Chats…`, or open the `.md` directly.
 
+See [updates.md](updates.md) for notes on recent fixes and changes.
+
 ## Install
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install.ps1
