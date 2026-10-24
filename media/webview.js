@@ -219,6 +219,7 @@ function send() {
 $('send').onclick = send;
 $('stop').onclick = () => vscode.postMessage({ type: 'stop' });
 $('md').onclick = () => vscode.postMessage({ type: 'transcript' });
+$('archive').onclick = () => vscode.postMessage({ type: 'archive' });
 $('chats').onclick = () => vscode.postMessage({ type: 'pickChat' });
 $('refreshModels').onclick = () => vscode.postMessage({ type: 'refreshModels' });
 $('deepseek').onclick = () => vscode.postMessage({ type: 'toggleDeepseek' });

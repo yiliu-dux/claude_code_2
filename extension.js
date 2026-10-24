@@ -559,6 +559,10 @@ class ChatSession {
         postModels(this);
         break;
       }
+      case 'archive': // close first: an open tab would re-save the chat
+        this.panel.dispose();
+        moveChat(this.chat.id, chatsDir(), archiveDir());
+        break;
       case 'pickChat': vscode.commands.executeCommand('claudeLite.openChat'); break;
       case 'refreshModels': fetchModels(); break;
       case 'toggleDeepseek': // global setting: onDidChangeConfiguration re-points every chat
