@@ -316,7 +316,9 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'Escape' && isFinding()) { e.preventDefault(); findClose(); }
 });
 // Mouse back/forward buttons never reach VS Code while the webview has focus; forward them as editor navigation.
-document.addEventListener('mouseup', e => {
+// Use mousedown: when VS Code itself handles the press in another editor and reveals this tab, the release
+// lands here as a stray mouseup, which would navigate a second time.
+document.addEventListener('mousedown', e => {
   if (e.button === 3 || e.button === 4) { e.preventDefault(); vscode.postMessage({ type: 'navigate', back: e.button === 3 }); }
 });
 findInput.addEventListener('input', () => findSchedule());
