@@ -15,6 +15,7 @@
       { "command": "claudeLite.openChat", "title": "Claude Lite: Open Chat..." },
       { "command": "claudeLite.searchChats", "title": "Claude Lite: Search All Chats..." },
       { "command": "claudeLite.openTranscript", "title": "Claude Lite: Open Current Chat as Markdown" },
+      { "command": "claudeLite.renameChat", "title": "Claude Lite: Rename Chat..." },
       { "command": "claudeLite.openChatsFolder", "title": "Claude Lite: Reveal Chats Folder" },
       { "command": "claudeLite.refreshModels", "title": "Claude Lite: Refresh Model List" }
     ],

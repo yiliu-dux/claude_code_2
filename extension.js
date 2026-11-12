@@ -685,16 +685,14 @@ class ChatSession {
   send(text) {
     text = text.trim();
     // Slash commands the CLI's print mode doesn't support are emulated here.
-    const slash = text.match(/^\/(btw|fork|rewind)\b\s*([\s\S]*)$/);
+    const slash = text.match(/^\/(btw|fork|rewind|rename)\b\s*([\s\S]*)$/);
+    if (slash?.[1] === 'rename') return slash[2].trim() ? this.rename(slash[2]) : this.note('Usage: /rename <name>');
     if (slash?.[1] === 'btw') return slash[2] ? this.btw(slash[2]) : this.note('Usage: /btw <question>');
     if (slash?.[1] === 'fork') return this.fork();
     if (slash?.[1] === 'rewind') return this.rewind();
     if (!text || this.busy) return;
     if (this.proc && this.syncPending()) this.kill(); // settings changed: restart (kills background tasks too); start() resumes the session
-    if (this.chat.title === 'New chat') {
-      this.chat.title = text.replace(/\s+/g, ' ').slice(0, 60);
-      this.panel.title = this.chat.title;
-    }
+    if (this.chat.title === 'New chat') this.setTitle(text); // placeholder until autoName() replaces it
     // uuid = the CLI's file-checkpoint key for this turn (used by /rewind to restore files).
     const uuid = crypto.randomUUID();
     this.push({ role: 'user', md: text, uuid, resumeAt: this.chat.lastUuid || null });
@@ -705,6 +703,40 @@ class ChatSession {
     this.note('');
     this.agent('Sending...');
     this.proc.stdin.write(JSON.stringify({ type: 'user', uuid, message: { role: 'user', content: text } }) + '\n');
+  }
+
+  setTitle(text) {
+    this.chat.title = text.replace(/\s+/g, ' ').trim().slice(0, 60);
+    this.panel.title = this.chat.title;
+    saveChat(this.chat);
+  }
+
+  // Manual name; titleSet stops autoName() from ever replacing it.
+  rename(text) {
+    this.chat.titleSet = true;
+    this.setTitle(text);
+  }
+
+  // After the first turn: ask a cheap, tool-less one-shot call for a short title (like /btw, not part of the session).
+  // Failures are silent: the truncated first message stays. Skipped for forks and renamed chats (titleSet) and for
+  // chats that already have several user messages (saved before this existed).
+  autoName() {
+    const c = this.chat, users = c.messages.filter(m => m.role === 'user');
+    if (c.titleSet || this.naming || users.length !== 1) return;
+    const reply = c.messages.find(m => m.role === 'assistant');
+    this.naming = true;
+    const quick = { ...c, settings: { model: deepseekOn() ? c.settings.model : 'haiku' } }; // no effort/perms/thinking for a title
+    const p = spawnClaude(quick, ['-p', '--no-session-persistence', '--tools', '', '--output-format', 'json']);
+    let out = '';
+    p.stdout.on('data', d => { out += d; });
+    p.on('error', () => {});
+    p.on('close', () => {
+      this.naming = false;
+      let title = '';
+      try { title = JSON.parse(out).result.trim().replace(/^["'`]+|["'`.]+$/g, ''); } catch { /* keep the placeholder */ }
+      if (title && !c.titleSet && !this.disposed) { c.titleSet = true; this.setTitle(title); }
+    });
+    p.stdin.end(`Reply with only a short title (at most 6 words, no quotes, no punctuation at the end) for this conversation.\n\nUser: ${users[0].md.slice(0, 1000)}\n\nAssistant: ${(reply?.md || '').slice(0, 1000)}`);
   }
 
   // Side question: a throwaway, tool-less fork of the session. Never touches the main conversation.
@@ -790,6 +822,7 @@ class ChatSession {
     const sid = c.sessionId || c.forkFrom;
     const f = Object.assign(newChat(), {
       title: `Fork: ${c.title}`.slice(0, 70),
+      titleSet: true,
       cwd: c.cwd,
       settings: { ...c.settings },
       context: at === undefined && c.context ? { ...c.context } : null,
@@ -1015,6 +1048,7 @@ class ChatSession {
     this.streamIdx = null;
     this.setBusy(false);
     saveChat(this.chat);
+    if (!interrupted && !failed) this.autoName();
   }
 
   // ---------- permission prompts: the CLI asks (can_use_tool), the webview shows a card, answer() replies ----------
@@ -1220,6 +1254,12 @@ function activate(context) {
     vscode.commands.registerCommand('claudeLite.openTranscript', () => {
       if (ChatSession.active) openTranscript(ChatSession.active.chat);
       else vscode.window.showInformationMessage('No active Claude Lite chat.');
+    }),
+    vscode.commands.registerCommand('claudeLite.renameChat', async () => {
+      const s = ChatSession.active;
+      if (!s) return vscode.window.showInformationMessage('No active Claude Lite chat.');
+      const v = await vscode.window.showInputBox({ prompt: 'Chat name', value: s.chat.title });
+      if (v?.trim()) s.rename(v);
     }),
     vscode.commands.registerCommand('claudeLite.openChatsFolder', () =>
       vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(chatsDir()))),
