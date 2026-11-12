@@ -343,7 +343,7 @@ function fetchModels() {
     try {
       const r = await controlRequest({ cwd: os.homedir(), settings: {} }, [], { subtype: 'initialize' });
       if (!r.models?.length) throw new Error('CLI returned no models');
-      models = { state: 'ok', list: r.models, error: '', source: 'cli' };
+      models = { state: 'ok', list: r.models, error: '', source: 'cli', commands: r.commands || [] };
     } catch (e) {
       models = { state: 'error', list: [], error: e.message, source: 'cli' };
     }

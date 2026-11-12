@@ -82,7 +82,14 @@ body { --find-all: #ffff00ff; --find-cur: #ff9632ff; --find-fg: #000; }
 #opts label { display: flex; gap: 6px; align-items: center; opacity: .85; font-size: 12px; }
 #model { min-width: 170px; }
 #btns { margin-left: auto; display: flex; gap: 6px; }
-#row { display: flex; }
+#row { display: flex; position: relative; }
+/* slash command menu: floats above the message box */
+#slash { position: absolute; left: 0; right: 0; bottom: 100%; margin-bottom: 4px; max-height: 220px; overflow-y: auto; z-index: 4; border-radius: 5px; border: 1px solid var(--vscode-focusBorder); background: var(--vscode-quickInput-background, var(--vscode-editorWidget-background)); color: var(--vscode-quickInput-foreground, var(--vscode-foreground)); }
+#slash[hidden] { display: none; }
+#slash div { padding: 3px 8px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#slash div.busy { opacity: .5; }
+#slash div.sel { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+#slash i { font-style: normal; opacity: .7; margin-left: 8px; }
 #input { flex: 1; box-sizing: border-box; resize: none; overflow-y: auto; line-height: 1.4; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, transparent); padding: 6px; }
 /* status line: agent activity on the left, other notes right-aligned on the same line */
 #status { margin-top: 4px; font-size: 11px; opacity: .7; display: flex; gap: 16px; }

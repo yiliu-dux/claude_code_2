@@ -80,7 +80,7 @@ log.addEventListener('click', e => {
 let busy = false;
 const isBtw = () => input.value.trim().startsWith('/btw ');
 const syncSend = () => { $('send').disabled = busy && !isBtw(); };
-function setBusy(b) { busy = b; $('stop').disabled = !b; syncSend(); showAgent(); }
+function setBusy(b) { busy = b; $('stop').disabled = !b; syncSend(); showAgent(); slashUpdate(); }
 // Status line: the agent's current activity (left; plus how long it has been at it while busy) and other notes (right).
 let agentMsg = { text: 'Ready', since: Date.now() };
 const elapsed = ms => { const s = Math.floor(ms / 1000); return s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + String(s % 60).padStart(2, '0') + 's'; };
@@ -138,7 +138,7 @@ window.addEventListener('message', ({ data: m }) => {
     case 'note': setNote(m.text); break;
     case 'rate': setRate(m); break;
     case 'setting': if (m.key === 'model') setModel(m.value); else $(m.key).value = m.value; break;
-    case 'models': buildModels(m); break;
+    case 'models': buildModels(m); cliCmds = m.commands || []; slashUpdate(); break;
     case 'deepseek': setDeepseek(m.on); break;
   }
 });
@@ -245,7 +245,50 @@ $('chats').onclick = () => vscode.postMessage({ type: 'pickChat' });
 $('refreshModels').onclick = () => vscode.postMessage({ type: 'refreshModels' });
 $('deepseek').onclick = () => vscode.postMessage({ type: 'toggleDeepseek' });
 $('settings').onclick = () => vscode.postMessage({ type: 'settings' });
-input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
+// ---------- slash command menu ----------
+// Wrapper-handled commands first, then the CLI's list (models message). While a turn runs only /btw works.
+const WRAPPER = [
+  { name: 'btw', argumentHint: '<question>', description: 'Ask a side question without adding it to the conversation', busyOk: true },
+  { name: 'fork', description: 'Fork a new chat from this conversation' },
+  { name: 'rewind', description: 'Rewind the conversation and file edits to an earlier message' },
+  { name: 'rename', argumentHint: '<name>', description: 'Rename this chat' },
+];
+let cliCmds = [], shown = [], sel = 0;
+const slash = $('slash');
+function slashUpdate() {
+  const m = /^\/(\S*)$/.exec(input.value);
+  const mine = new Set(WRAPPER.map(c => c.name));
+  shown = m ? [...WRAPPER, ...cliCmds.filter(c => !mine.has(c.name))].filter(c => c.name.toLowerCase().startsWith(m[1].toLowerCase())) : [];
+  sel = Math.min(sel, Math.max(0, shown.length - 1));
+  slash.hidden = !shown.length;
+  slash.replaceChildren(...shown.map((c, i) => {
+    const d = document.createElement('div'), h = document.createElement('i');
+    d.className = (i === sel ? 'sel ' : '') + (busy && !c.busyOk ? 'busy' : '');
+    d.append('/' + c.name);
+    h.textContent = [c.argumentHint, c.description].filter(Boolean).join(' - ');
+    d.append(h);
+    d.title = c.description || '';
+    d.onmousedown = e => { e.preventDefault(); slashPick(i); };
+    return d;
+  }));
+  slash.children[sel]?.scrollIntoView({ block: 'nearest' });
+}
+function slashPick(i) {
+  input.value = '/' + shown[i].name + ' ';
+  slashUpdate();
+  autoResize(); syncSend(); input.focus();
+}
+input.addEventListener('input', () => { sel = 0; slashUpdate(); });
+input.addEventListener('keydown', e => {
+  if (!slash.hidden && !e.isComposing) {
+    const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+    if (step) { e.preventDefault(); sel = (sel + step + shown.length) % shown.length; return slashUpdate(); }
+    if (e.key === 'Escape') { e.preventDefault(); slash.hidden = true; return; }
+    // Enter on an already-complete command name sends it as usual
+    if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && input.value !== '/' + shown[sel].name)) { e.preventDefault(); return slashPick(sel); }
+  }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+});
 for (const k of ['effort', 'thinking', 'permissionMode'])
   $(k).addEventListener('change', () => vscode.postMessage({ type: 'setting', key: k, value: $(k).value.trim() }));
 // ---------- find bar ----------
