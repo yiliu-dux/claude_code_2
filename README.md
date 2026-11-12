@@ -27,7 +27,7 @@ Thinking budget is passed via `MAX_THINKING_TOKENS`. Set `claudeLite.useWsl` to 
 
 On startup the extension compares `claude --version` with the newest published version (npm registry, using the CLI's `autoUpdatesChannel`, `latest` in WSL mode) and warns if it is out of date. It never updates on its own: the warning's **Run claude update** button runs `claude update` in a terminal. Turn the check off with `claudeLite.checkForUpdates`.
 
-Permission prompts can't be answered in this mode: tools that need approval are denied and reported, so pick `auto`, `acceptEdits` or `bypass` in the bottom bar.
+Tools that need approval show a card above the message box with **Allow**, **Always allow** (saves the CLI's tool rule) and **Deny**. Changing the **perms** dropdown applies immediately to the running process (no restart); if the CLI refuses the switch the Send button turns into "Send + Restart" instead. The CLI's `AskUserQuestion` tool is denied (not supported yet).
 
 ## DeepSeek mode
 

@@ -180,6 +180,12 @@ function toolLabel(b) {
   return what ? `${b.name}: ${what}` : b.name;
 }
 
+// What a permission card shows for a tool: the part of its input the user is actually approving.
+function askDetail(name, input = {}) {
+  const text = name === 'Bash' ? input.command : name === 'ExitPlanMode' ? input.plan : input.file_path || input.notebook_path;
+  return text ?? JSON.stringify(input, null, 2);
+}
+
 const resultText = c => typeof c === 'string' ? c
   : Array.isArray(c) ? c.map(x => (x.type === 'text' ? x.text : `[${x.type}]`)).join('\n') : '';
 
@@ -518,6 +524,7 @@ class ChatSession {
     this.tools = new Map(); // tool_use_id -> { idx, block }
     this.running = new Map(); // tool_use_id -> status label, for tools of the current turn without a result yet
     this.bg = []; // background tasks the CLI reports as running (it starts a new turn by itself when one finishes)
+    this.asks = new Map(); // request_id -> pending can_use_tool request, waiting for the user's answer
     this.renderTimers = new Map();
     this.renderSeq = new Map(); // idx -> latest render request, so a slow older render can't overwrite a newer one
     this.disposed = false;
@@ -551,7 +558,7 @@ class ChatSession {
     switch (m.type) {
       case 'ready': {
         const messages = await Promise.all(this.chat.messages.map(async (msg, idx) => ({ idx, role: msg.role, rewound: msg.rewound, html: await this.html(msg.md, msg.role), ts: this.stamp(idx) })));
-        this.post({ type: 'init', chatId: this.chat.id, settings: this.chat.settings, options: OPTIONS, messages, busy: this.busy, deepseek: deepseekOn() });
+        this.post({ type: 'init', chatId: this.chat.id, settings: this.chat.settings, options: OPTIONS, messages, busy: this.busy, deepseek: deepseekOn(), asks: [...this.asks.keys()].map(id => this.askCard(id)) });
         this.postAgent();
         this.syncPending();
         this.postContext();
@@ -570,6 +577,7 @@ class ChatSession {
       case 'settings': vscode.commands.executeCommand('workbench.action.openSettings', '@ext:local.claude-lite'); break;
       case 'send': this.send(m.text); break;
       case 'stop': this.stop(); break;
+      case 'answer': this.answer(m.id, m.decision); break;
       case 'rewind': this.rewind(m.idx); break;
       case 'fork': this.fork(m.idx); break;
       case 'setting': this.applySetting(m.key, m.value); break;
@@ -601,7 +609,10 @@ class ChatSession {
     // Model/effort/etc are CLI flags: nothing happens now. The next send restarts the process (it resumes the same
     // session) if the settings differ from what it was started with. Notes compare against that, not the previous dropdown value.
     const applied = this.chat.applied[key] ?? '';
-    this.note(value === applied && !effortFix ? '' : `${SETTING_NAMES[key]}: ${label(applied)} -> ${label(value)} (${this.proc ? 'restarts on next send' : 'applies to next message'})${effortFix ? ' | ' + effortFix : ''}`);
+    // The permission mode can change on the live process; `applied` follows once the CLI confirms (see handle()).
+    const live = key === 'permissionMode' && this.proc && value;
+    this.note(value === applied && !effortFix ? '' : `${SETTING_NAMES[key]}: ${label(applied)} -> ${label(value)} (${live ? 'applying now' : this.proc ? 'restarts on next send' : 'applies to next message'})${effortFix ? ' | ' + effortFix : ''}`);
+    if (live) this.proc.stdin.write(JSON.stringify({ type: 'control_request', request_id: `mode_${value}`, request: { subtype: 'set_permission_mode', mode: value } }) + '\n');
     this.syncPending();
   }
 
@@ -804,7 +815,9 @@ class ChatSession {
   start() {
     this.chat.applied = { ...this.chat.settings, deepseek: deepseekOn() };
     this.appliedDsRev = dsEnvRev;
-    const p =spawnClaude(this.chat, [...STREAM_ARGS, '--include-partial-messages', ...(this.resumeArgs() || [])]);
+    // stdio: permission prompts arrive as can_use_tool requests (see askPermission). --allow-dangerously-skip-permissions
+    // only makes a live switch to bypass possible; it does not enable bypass.
+    const p = spawnClaude(this.chat, [...STREAM_ARGS, '--include-partial-messages', '--permission-prompt-tool', 'stdio', '--allow-dangerously-skip-permissions', ...(this.resumeArgs() || [])]);
     this.proc = p;
     this.syncPending();
     const cmd = cfg().get('useWsl') ? 'wsl.exe' : cfg().get('claudePath') || 'claude';
@@ -824,6 +837,7 @@ class ChatSession {
       if (this.proc !== p) return; // intentional kill
       this.proc = null;
       this.bg = [];
+      this.clearAsks();
       this.syncPending();
       if (this.busy) {
         this.push({ role: 'info', md: `> **Error:** claude exited (code ${code})\n\n${fence('', errTail.trim() || '(no stderr)')}` });
@@ -839,6 +853,7 @@ class ChatSession {
     this.proc = null;
     this.bg = [];
     this.running.clear();
+    this.clearAsks();
     if (p) try { p.kill(); } catch { /* already gone */ }
     this.syncPending();
   }
@@ -893,9 +908,17 @@ class ChatSession {
         if (w) { globalState?.update('usage', w); showUsage(w); }
         break;
       }
-      case 'control_response':
-        if (ev.response?.request_id === 'ctx') this.onContextUsage(ev.response.response);
+      case 'control_response': {
+        const { request_id: id, subtype, error } = ev.response || {}, mode = id?.startsWith('mode_') && id.slice(5);
+        if (id === 'ctx') this.onContextUsage(ev.response.response);
+        else if (mode && subtype === 'success') { this.chat.applied.permissionMode = mode; this.note(''); this.syncPending(); saveChat(this.chat); }
+        else if (mode) { this.note(`Warning: ${error} - applies on restart`); this.syncPending(); }
         break;
+      }
+      case 'control_request':
+        if (ev.request?.subtype === 'can_use_tool') this.askPermission(ev);
+        break;
+      case 'control_cancel_request': this.dropAsk(ev.request_id); break;
       case 'stream_event': this.onStream(ev.event); break;
       case 'assistant':
         if (ev.uuid) this.chat.lastUuid = ev.uuid;
@@ -985,16 +1008,52 @@ class ChatSession {
     } else if (failed) {
       this.push({ role: 'info', md: `> **Error:** ${ev.subtype}: ${ev.result || (ev.errors || []).join('; ') || 'error'}` });
     }
-    if (ev.permission_denials?.length) {
-      const names = [...new Set(ev.permission_denials.map(d => d.tool_name))].join(', ');
-      this.push({ role: 'info', md: `> Permission denied for: **${names}** - change the permission mode (bottom bar) and ask again.` });
-    }
+    this.clearAsks();
     this.agent(interrupted ? 'Interrupted' : [failed ? `Error (${ev.subtype || 'error'})` : 'Done',
       `${((ev.duration_ms || 0) / 1000).toFixed(1)}s`, `${ev.num_turns ?? '?'} turns`, this.bg.length && this.bgText()].filter(Boolean).join(' | '));
     this.running.clear();
     this.streamIdx = null;
     this.setBusy(false);
     saveChat(this.chat);
+  }
+
+  // ---------- permission prompts: the CLI asks (can_use_tool), the webview shows a card, answer() replies ----------
+
+  askPermission({ request_id: id, request: r }) {
+    if (r.tool_name === 'AskUserQuestion') return this.respond(id, { behavior: 'deny', message: 'Questions are not supported in this chat UI. Decide yourself or ask in plain text.' });
+    this.asks.set(id, r);
+    this.agent(`Waiting for permission: ${toolLabel({ name: r.tool_name, input: r.input })}`);
+    this.post({ type: 'ask', ...this.askCard(id) });
+  }
+
+  askCard(id) {
+    const r = this.asks.get(id);
+    return { id, title: toolLabel({ name: r.tool_name, input: r.input }), detail: askDetail(r.tool_name, r.input), canAlways: !!this.rules(r).length };
+  }
+
+  // "Always allow" saves only the tool rules; the other suggestions (mode, directories) are broader than what the user is approving.
+  rules(r) { return (r.permission_suggestions || []).filter(s => s.type === 'addRules'); }
+
+  answer(id, decision) {
+    const r = this.asks.get(id);
+    if (!r) return;
+    this.dropAsk(id);
+    this.respond(id, decision === 'deny' ? { behavior: 'deny', message: 'The user denied this action' }
+      : { behavior: 'allow', updatedInput: r.input, ...(decision === 'always' && { updatedPermissions: this.rules(r) }) });
+  }
+
+  respond(id, response) {
+    this.proc?.stdin.write(JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: id, response } }) + '\n');
+  }
+
+  dropAsk(id) {
+    if (!this.asks.delete(id)) return;
+    this.post({ type: 'askGone', id });
+    if (this.busy) this.showRunning();
+  }
+
+  clearAsks() {
+    for (const id of [...this.asks.keys()]) this.dropAsk(id);
   }
 
   // Live estimate while streaming; needs a known window (the CLI's exact numbers arrive via onContextUsage after each turn).

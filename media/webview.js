@@ -118,6 +118,8 @@ window.addEventListener('message', ({ data: m }) => {
       setModel(m.settings.model || '');
       setDeepseek(!!m.deepseek);
       log.innerHTML = '';
+      $('asks').replaceChildren();
+      m.asks.forEach(addAsk);
       m.messages.forEach(upsert);
       setBusy(m.busy);
       stick = true; toBottom();
@@ -128,6 +130,8 @@ window.addEventListener('message', ({ data: m }) => {
       $('send').textContent = m.restart ? 'Send + Restart' : 'Send';
       $('send').title = m.restart ? 'Restarts the claude process (resumes this session) to apply:\n' + m.changes.join('\n') : m.changes.length ? 'Pending:\n' + m.changes.join('\n') : '';
       break;
+    case 'ask': addAsk(m); break;
+    case 'askGone': $('ask_' + m.id)?.remove(); break;
     case 'prefill': input.value = m.text; autoResize(); syncSend(); input.focus(); break;
     case 'ctx': setCtx(m); break;
     case 'agent': agentMsg = { text: m.text, since: Date.now() - m.age }; showAgent(); break;
@@ -138,6 +142,23 @@ window.addEventListener('message', ({ data: m }) => {
     case 'deepseek': setDeepseek(m.on); break;
   }
 });
+
+// Permission card: the CLI wants to run a tool; the host answers it with the chosen decision.
+function addAsk({ id, title, detail, canAlways }) {
+  const card = document.createElement('div'), head = document.createElement('b'), body = document.createElement('pre'), btns = document.createElement('div');
+  card.id = 'ask_' + id; card.className = 'ask'; btns.className = 'btns';
+  head.textContent = title; body.textContent = detail;
+  for (const [decision, text] of [['allow', 'Allow'], ['always', 'Always allow'], ['deny', 'Deny']]) {
+    if (decision === 'always' && !canAlways) continue;
+    const b = document.createElement('button');
+    b.textContent = text;
+    if (decision === 'allow') b.className = 'on';
+    b.onclick = () => vscode.postMessage({ type: 'answer', id, decision });
+    btns.append(b);
+  }
+  card.append(head, body, btns);
+  $('asks').append(card);
+}
 
 // DeepSeek toggle: the host owns the global claudeLite.deepseek.enabled setting; this only mirrors it.
 function setDeepseek(on) {
