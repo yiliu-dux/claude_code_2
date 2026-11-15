@@ -853,7 +853,8 @@ class ChatSession {
     this.appliedDsRev = dsEnvRev;
     // stdio: permission prompts arrive as can_use_tool requests (see askPermission). --allow-dangerously-skip-permissions
     // only makes a live switch to bypass possible; it does not enable bypass.
-    const p = spawnClaude(this.chat, [...STREAM_ARGS, '--include-partial-messages', '--permission-prompt-tool', 'stdio', '--allow-dangerously-skip-permissions', '--disallowed-tools', 'AskUserQuestion', ...(this.resumeArgs() || [])]);
+    const extra = (cfg().get('extraPrompt') || '').trim();
+    const p = spawnClaude(this.chat, [...STREAM_ARGS, '--include-partial-messages', '--permission-prompt-tool', 'stdio', '--allow-dangerously-skip-permissions', '--disallowed-tools', 'AskUserQuestion', ...(extra ? ['--append-system-prompt', extra] : []), ...(this.resumeArgs() || [])]);
     this.proc = p;
     this.syncPending();
     const cmd = cfg().get('useWsl') ? 'wsl.exe' : cfg().get('claudePath') || 'claude';
