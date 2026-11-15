@@ -241,6 +241,9 @@ function spawnClaude(chat, args) {
     env.WSLENV = [env.WSLENV, ...forward].filter(Boolean).join(':');
   }
   const p = cp.spawn(cmd, args, { cwd, env, windowsHide: true });
+  // A missing cwd makes spawn fail with a misleading "spawn claude ENOENT"; say what is really wrong.
+  // Registered first, so the callers' 'error' handlers see the corrected message.
+  if (cwd && !fs.existsSync(cwd)) p.on('error', e => { e.message = `working directory does not exist: ${cwd}`; });
   p.stdout.setEncoding('utf8'); // decodes multi-byte characters split across chunks
   p.stderr.setEncoding('utf8');
   p.stdin.on('error', () => { /* process gone; reported by its 'error' / 'close' handlers */ });
